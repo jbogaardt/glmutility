@@ -13,7 +13,6 @@ from bokeh.io import output_notebook, show
 from bokeh.models import LinearAxis, Range1d
 import ipywidgets as widgets
 from ipywidgets import interactive, fixed
-from IPython.display import display, HTML
 import copy
 output_notebook()
 
@@ -31,17 +30,32 @@ class GLM():
         self.variates = {}
         self.customs = {}
         self.interactions = {}
+        self.offsets = {}
+        self.fitted_factors = {'simple':[], 'customs':[], 'variates':[],'interactions':[],'offsets':[]}
         self.transformed_data = self.data[[self.weight] + [self.dependent]]
         self.formula = {}
         self.model = None
         self.results = None
     
     def set_base_level(self):
+        """
+        Using the specified weight to measure volume, will automatically set base level to the
+        discrete level with the most volume of data.
+        
+        This gets used in the partial dependence plots, whereby the plot is set
+        such that the base level prediction is the model intercept.
+        
+        It currently gets used in the model fitting for simple factors, but it needs to be recognized
+        in the model fitting so that the intercept is the true intercept
+        """
         self.data[self.independent + [self.weight]]
         base_dict = {}
         for item in self.independent:
             col = self.data.groupby(item)[self.weight].sum()
             base_dict[item] = col[col == max(col)].index[0]
+            # Necessary for Patsy formula to recognize both str and non-str data types.
+            if type(base_dict[item]) is str:
+                base_dict[item] = '\'' + base_dict[item] + '\''
         return base_dict
     
     def set_PDP(self):
@@ -58,19 +72,60 @@ class GLM():
             if variates != []:
                 temp = self.transformed_data.groupby(columns)[variates].mean().reset_index()
             else:
-                temp = self.transformed_data.groupby(columns)['Exposure'].mean().reset_index().drop(['Exposure'], axis=1)   
+                temp = self.transformed_data.groupby(columns)[self.weight].mean().reset_index().drop([self.weight], axis=1)   
             PDP[item] = temp
         tempPDP = copy.deepcopy(PDP)
+        # Extract parameter table for constructing Confidence Interval Charts
+        out = self.extract_params()
+        intercept_se = out['CI offset'][0]
+        # For every factor in [independent]
         for item in tempPDP.keys():
             for append in tempPDP.keys():
                 if item != append:
-                    temp = tempPDP[append][tempPDP[append][append]==self.base_dict[append]]
+                    if type(self.base_dict[append]) is str:
+                        temp = tempPDP[append][tempPDP[append][append]==self.base_dict[append].replace('\'','')]
+                    else:
+                        temp = tempPDP[append][tempPDP[append][append]==self.base_dict[append]]
                     for column in temp.columns:
                         PDP[item][column] = temp[column].iloc[0]
-            PDP[item]['Model'] = self.results.predict(PDP[item]) 
+            PDP[item]['Model'] = self.results.predict(PDP[item])
+            PDP[item]['Model'] = self.link_transform(PDP[item]['Model'])
+            offset_subset = {v['source']:k for k,v in self.offsets.items()} 
+            if type(offset_subset.get(item)) is str:
+                PDP[item]['Model'] =  PDP[item]['Model'] + PDP[item][item].map(self.offsets[offset_subset.get(item)]['dictionary'])
+            out_subset = out[out['field']==item][['value', 'CI offset']]
+            out_subset['value'] = out_subset['value'].astype(PDP[item][item].dtype)
+            out_subset.set_index('value',inplace=True)
             PDP[item].set_index(item, inplace=True)
+            PDP[item] = PDP[item].merge(out_subset,how='left', left_index=True, right_index=True)
+            PDP[item]['CI offset'] = PDP[item]['CI offset'].fillna(intercept_se)
+            PDP[item]['CI_U'] = PDP[item]['Model'] + PDP[item]['CI offset']
+            PDP[item]['CI_L'] = PDP[item]['Model'] - PDP[item]['CI offset']          
         self.PDP = PDP
     
+    def link_transform(self, series, transform_type='linear predictor'):
+        if self.link == 'Log':
+            if transform_type == 'linear predictor':
+                return np.log(series)
+            else:
+                return np.exp(series)
+        if self.link == 'Logit':
+            if transform_type == 'linear predictor':
+                return np.log(series/(1-series))
+            else:
+                return np.exp(series)/(1 + np.exp(series))
+        if self.link == 'Identity':
+            return series
+        
+    def extract_params(self):
+        summary = pd.read_html(self.results.summary().__dict__['tables'][1].as_html(), header=0)[0].iloc[:,0]
+        out = pd.DataFrame()
+        out['field'] = summary.str.split(",").str[0].str.replace('C\(','')
+        out['value'] = summary.str.split(".").str[1].astype(str).str.replace(']','')
+        out['param'] = self.results.__dict__['_results'].__dict__['params']
+        out['CI offset'] = self.results.__dict__['_results'].__dict__['_cache']['bse']*1.95996398454005
+        return out
+        
     def create_variate(self, name, column, degree, dictionary={}):
         sub_dict = {}
         Z, norm2, alpha = self.ortho_poly_fit(x = self.data[column], degree=degree, dictionary=dictionary)
@@ -88,7 +143,7 @@ class GLM():
         temp = pd.get_dummies(temp.to_frame(), drop_first=True)
         self.customs[name] = {'source':column, 'Z':temp, 'dictionary':dictionary}
     
-    def fit(self, simple=[], customs=[], variates=[], interactions=[]):
+    def fit(self, simple=[], customs=[], variates=[], interactions=[], offsets=[]):
         link_dict = {'Identity':sm.families.links.identity,
                      'Log':sm.families.links.log,
                      'Logit':sm.families.links.logit}
@@ -100,17 +155,27 @@ class GLM():
                        'Gamma':sm.families.Gamma(link)
                        }
         self.set_formula(simple=simple, customs=customs, variates=variates, interactions=interactions)
+        if len(offsets) > 0:
+            offset = self.offsets[offsets[0]]['Z']
         self.transformed_data = self.transform_data()
-        self.model = sm.GLM.from_formula(formula=self.formula['formula'] , data=self.transformed_data, family=family_dict[self.family], freq_weights=self.transformed_data[self.weight])
+        self.model = sm.GLM.from_formula(formula=self.formula['formula'] , data=self.transformed_data, family=family_dict[self.family], freq_weights=self.transformed_data[self.weight], offset=offset)
         self.results = self.model.fit(scale=self.scale)
-        fitted = self.results.predict(self.transformed_data)
+        fitted = self.results.predict(self.transformed_data, offset=offset)*self.transformed_data[self.weight]
         fitted.name="Fitted Avg"
         self.transformed_data = pd.concat((self.transformed_data, fitted),axis=1)
+        self.fitted_factors = {'simple':simple, 'customs':customs,'variates':variates, 'interactions':interactions,'offsets':offsets} 
         self.set_PDP()
         
     def set_formula(self, simple=[], customs=[], variates=[], interactions=[]):
-        simple_str = ' + '.join(simple)
-        variate_str = ' + '.join([' + '.join(self.variates[item]['Z'].columns) for item in variates])
+        '''
+        Sets the Patsy Formula for the GLM.
+        
+        Todo:
+            Custom factors need a base level
+        '''
+        #simple_str = ' + '.join(simple)
+        simple_str = ' + '.join(['C(' + item + ', Treatment(reference=' + str(self.base_dict[item]) + '))' for item in simple])
+        variate_str = ' + '.join([' + '.join(self.variates[item]['Z'].columns[1:]) for item in variates])
         custom_str = ' + '.join([' + '.join(self.customs[item]['Z'].columns) for item in customs])
         interaction_str = ' + '.join([self.interactions[item] for item in interactions])
         if simple_str != '' and variate_str != '':
@@ -124,11 +189,17 @@ class GLM():
         self.formula['customs'] = customs
         self.formula['variates'] = variates
         self.formula['interactions'] = interactions
-        self.formula['formula'] = self.dependent + ' ~ ' +  simple_str + variate_str + custom_str + interaction_str    
-        
+        #self.formula['formula'] = self.dependent + ' ~ ' +  simple_str + variate_str + custom_str + interaction_str    
+        self.formula['formula'] = '_response ~ ' +  simple_str + variate_str + custom_str + interaction_str    
+        # Intercept only model
+        if simple_str + variate_str + custom_str + interaction_str == '':
+            self.formula['formula'] = self.formula['formula'] + '1'
+
     def transform_data(self, data=None):
         if data is None:
             transformed_data = self.data[self.independent + [self.weight] + [self.dependent]] 
+            transformed_data = copy.deepcopy(transformed_data)
+            transformed_data['_response'] = transformed_data[self.dependent] / transformed_data[self.weight]
             for i in range(len(self.formula['variates'])):
                 transformed_data = pd.concat((transformed_data, self.variates[self.formula['variates'][i]]['Z']), axis=1)
             for i in range(len(self.formula['customs'])):
@@ -145,7 +216,7 @@ class GLM():
                 temp = data[self.customs[name]['source']].map(self.customs[name]['dictionary'])
                 temp = pd.get_dummies(temp.to_frame())
                 temp = temp[list(self.customs[name]['Z'].columns)]
-                transformed_data = pd.concat((transformed_data, temp), axis=1)  
+                transformed_data = pd.concat((transformed_data, temp), axis=1) 
         return transformed_data
     
     def predict(self, data=None):
@@ -171,7 +242,11 @@ class GLM():
         # Only designed to work with 2-way interaction
         self.interactions[name] =  ' + '.join([val1+':'+val2 for val1 in transformed_interaction[0] for val2 in transformed_interaction[1]])
         
-    
+    def create_offset(self, name, column, dictionary):
+        temp = self.data[column].map(dictionary)
+        temp = self.link_transform(temp)
+        self.offsets[name] = {'source':column, 'Z':temp, 'dictionary':dictionary}
+        
     def ortho_poly_fit(self, x, degree = 1, dictionary={}):
         n = degree + 1
         if dictionary != {}:
@@ -207,21 +282,27 @@ class GLM():
         return Z
     
     def view(self, data = None):
-        def view_one_way(var, fitted, model, data):
+        def view_one_way(var, transform, obs, fitted, model, ci, data):
             if data is None:
-                temp = pd.pivot_table(data=self.transformed_data, index=[var], values=['Loss', 'Exposure', 'Fitted Avg'], aggfunc=np.sum)
+                temp = pd.pivot_table(data=self.transformed_data, index=[var], values=[self.dependent, self.weight, 'Fitted Avg'], aggfunc=np.sum)
             else:
-                temp = pd.pivot_table(data=self.predict(data), index=[var], values=['Loss', 'Exposure', 'Fitted Avg'], aggfunc=np.sum)
-            temp['Observed'] = temp['Loss']/temp['Exposure']
-            temp['Fitted'] = temp['Fitted Avg']/temp['Exposure']
-            temp = temp.merge(self.PDP[var][["Model"]], how='inner', left_index=True, right_index=True)
-            y_range = Range1d(start=0, end=temp['Exposure'].max()*1.8)
+                temp = pd.pivot_table(data=self.predict(data), index=[var], values=[self.dependent, self.weight, 'Fitted Avg'], aggfunc=np.sum)
+            temp['Observed'] = temp[self.dependent]/temp[self.weight]
+            temp['Fitted'] = temp['Fitted Avg']/temp[self.weight]
+            temp = temp.merge(self.PDP[var][['Model','CI_U','CI_L']], how='inner', left_index=True, right_index=True)
+            if transform == 'Predicted Value':
+                for item in ['Model','CI_U','CI_L']:
+                    temp[item] = self.link_transform(temp[item],'predicted value')
+            else:
+                for item in ['Observed','Fitted']:
+                    temp[item] = self.link_transform(temp[item],'linear predictor')
+            y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
             if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
-                p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Observed " + var, x_range=list(temp.index))
+                p = figure(plot_width=700, plot_height=400, y_range=y_range, title=var, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False)
             else:
-                p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Observed " + var)
+                p = figure(plot_width=700, plot_height=400, y_range=y_range, title=var, toolbar_location = 'right', toolbar_sticky=False)
             # setting bar values
-            h = np.array(temp['Exposure'])
+            h = np.array(temp[self.weight])
             # Correcting the bottom position of the bars to be on the 0 line.
             adj_h = h/2
             # add bar renderer            
@@ -230,21 +311,36 @@ class GLM():
             p.extra_y_ranges = {"foo": Range1d(start=min(temp['Observed'].min(), temp['Model'].min())/1.1, end=max(temp['Observed'].max(), temp['Model'].max())*1.1)}
             p.add_layout(LinearAxis(y_range_name="foo"), 'right')
             # Observed Average line values
-            p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
+            if obs == True:
+                p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
             if fitted == True:
                 p.line(temp.index, temp['Fitted'], line_width=2, color="#006400", y_range_name="foo")
             if model == True:
                 p.line(temp.index, temp['Model'], line_width=2, color="#00FF00", y_range_name="foo")
+            if ci == True:
+                p.line(temp.index, temp['CI_U'], line_width=2, color="#db4437", y_range_name="foo")
+                p.line(temp.index, temp['CI_L'], line_width=2, color="#db4437", y_range_name="foo")
+                
             show(p)
-        vw = interactive(view_one_way, var=self.independent, fitted=True, model=True, data=fixed(data), layout=widgets.Layout(display="inline-flex"))
-        return vw
+        var = widgets.Dropdown(options=self.independent, description='Field:', value=self.independent[0])
+        transform = widgets.ToggleButtons(options=['Linear Predictor', 'Predicted Value'],button_style='', value='Predicted Value',description="Transform:")
+        obs = widgets.ToggleButton(value=True,description='Observed Value',button_style='info')
+        fitted = widgets.ToggleButton(value=True,description='Fitted Value',button_style='info')
+        model = widgets.ToggleButton(value=False,description='Model Value',button_style='warning')
+        ci = widgets.ToggleButton(value=False,description='Conf. Interval',button_style='warning')
+        vw = interactive(view_one_way, var=var, transform=transform, obs=obs, fitted=fitted, model=model, ci=ci, data=fixed(data))
+        return widgets.VBox((widgets.HBox((var,transform)), widgets.HBox((obs, fitted,model, ci)),vw.children[-1]))
+    
     
     def lift_chart(self, data=None):
         if data is None:
             data = self.transformed_data
         else:
             data = self.predict(data)
-        temp = data[[self.weight, self.dependent, 'Fitted Avg']].sort_values('Fitted Avg')
+        temp = data[[self.weight, self.dependent, 'Fitted Avg']]
+        temp = copy.deepcopy(temp)
+        temp['sort'] = temp['Fitted Avg']/temp[self.weight]
+        temp = temp.sort_values('sort')
         temp['decile'] = (temp[self.weight].cumsum()/((sum(temp[self.weight])*1.00001)/10)+1).apply(np.floor)
         temp = pd.pivot_table(data=temp, index=['decile'], values=[self.dependent, self.weight, 'Fitted Avg'], aggfunc='sum')
         temp['Observed'] = temp[self.dependent]/temp[self.weight]
@@ -263,6 +359,9 @@ class GLM():
         p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
         p.line(temp.index, temp['Fitted'], line_width=2, color="#006400", y_range_name="foo")
         show(p)
+    
+    def summary(self):
+        return self.results.summary()
         
         
 
