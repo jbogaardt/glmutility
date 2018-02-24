@@ -48,7 +48,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img1.PNG")
+![alt text](./img1.PNG)
 
 
 
@@ -80,7 +80,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img2.PNG")
+![alt text](./img2.PNG)
 
 
 ### Variates
@@ -101,7 +101,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img3.PNG")
+![alt text](./img3.PNG)
 
 
 ### Offsets?  No problem
@@ -131,7 +131,7 @@ MyGLM.view()
 ```
 
 
-![alt text]("./img4.PNG")
+![alt text]("./img4.PNG)
 
 
 ### Two way Actual vs Expected
