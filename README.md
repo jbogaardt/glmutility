@@ -48,7 +48,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img1.PNG)
+![img1](./img1.PNG)
 
 
 
@@ -80,7 +80,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img2.PNG)
+![img2](./img2.PNG)
 
 
 ### Variates
@@ -101,7 +101,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img3.PNG)
+![img3](./img3.PNG)
 
 
 ### Offsets?  No problem
@@ -131,7 +131,7 @@ MyGLM.view()
 ```
 
 
-![alt text]("./img4.PNG)
+![img4](./img4.PNG)
 
 
 ### Two way Actual vs Expected
@@ -144,4 +144,4 @@ MyGLM.two_way('Age','Gender')
 
 
 
-![alt text](./img5.PNG)
+![img5](./img5.PNG)
