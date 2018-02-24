@@ -2,6 +2,9 @@
 GLMUtility is built around statsmodels GLM framework.  It's purpose is to create a quasi-UI in Jupyter to allow for a point-and-click
 UI experience.  It is quasi as it still requires writing Python code, but it is heavily abstracted away.
 
+For the P&C actuaries out there, the workflow design is highly inspired by one of the more prominent GLM
+GUIs in the industry.
+
 
 # GLMUtility Example
 
@@ -45,7 +48,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img1.png")
+![alt text](./img1.PNG")
 
 
 
@@ -77,7 +80,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img2.png")
+![alt text](./img2.PNG")
 
 
 ### Variates
@@ -98,7 +101,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img3.png")
+![alt text](./img3.PNG")
 
 
 ### Offsets?  No problem
@@ -128,7 +131,7 @@ MyGLM.view()
 ```
 
 
-![alt text]("./img4.png")
+![alt text]("./img4.PNG")
 
 
 ### Two way Actual vs Expected
