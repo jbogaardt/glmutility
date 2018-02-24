@@ -128,7 +128,7 @@ MyGLM.view()
 ```
 
 
-![alt text](./img4.png")
+![alt text]("./img4.png")
 
 
 ### Two way Actual vs Expected
@@ -141,4 +141,4 @@ MyGLM.two_way('Age','Gender')
 
 
 
-![alt text](./img5.png")
+![alt text]("./img5.png")
