@@ -141,4 +141,4 @@ MyGLM.two_way('Age','Gender')
 
 
 
-![alt text](./img5.png)
+![alt text](./img5.PNG)
