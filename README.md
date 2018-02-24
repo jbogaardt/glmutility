@@ -5,6 +5,7 @@ UI experience.  It is quasi as it still requires writing Python code, but it is 
 For the P&C actuaries out there, the workflow design is highly inspired by one of the more prominent GLM
 GUIs in the industry.
 
+Data prerequisite is that all variables be discrete (i.e. bin your continuous variables).  The utility supports pandas dataframes. 
 
 # GLMUtility Example
 
@@ -39,7 +40,8 @@ MyGLM.fit()
 ```
 
 ### view() is your UI
-Using the view() method, we can toggle one way views of our observed response, our fitted averages, marginal plots of any fitted features, as wella s confidence intervals.
+Using the view() method, we can toggle one way views of our observed response, our fitted averages, marginal plots of any fitted features, as well as confidence intervals.  In a Jupyter notebook, these buttons and drop downs are
+fully functional.
 
 
 
