@@ -17,33 +17,20 @@ df = pd.read_pickle('sample.pkl')
 from GLMUtility import GLMUtility
 ```
 
-    C:\Users\jbogaard\AppData\Local\Continuum\anaconda3\lib\site-packages\statsmodels\compat\pandas.py:56: FutureWarning: The pandas.core.datetools module is deprecated and will be removed in a future version. Please use the pandas.tseries module instead.
-      from pandas.core import datetools
-    
 
-
-
-    <div class="bk-root">
-        <a href="https://bokeh.pydata.org" target="_blank" class="bk-logo bk-logo-small bk-logo-notebook"></a>
-        <span id="6f01997b-549e-493e-9037-c63c4d566e9f">Loading BokehJS ...</span>
-    </div>
-
-
-
-
-To create a GLM, you need to specify the universe of predictor (or independent) features, a response (or dependent variable), and finally, a weight. 
+To create a GLM, you need to specify the universe of predictor (or independent) features, a response (or dependent variable), and finally, a weight.
 
 
 ```python
 independent = ['Gender','Age']
 dependent = 'Response'
 weight = 'Weight'
-MyGLM = GLMUtility.GLM(data=df, 
-                       independent=independent, 
-                       dependent=dependent, 
-                       weight=weight, 
-                       scale='X2', 
-                       family='Poisson', 
+MyGLM = GLMUtility.GLM(data=df,
+                       independent=independent,
+                       dependent=dependent,
+                       weight=weight,
+                       scale='X2',
+                       family='Poisson',
                        link='Log')
 MyGLM.fit()
 ```
@@ -58,7 +45,8 @@ MyGLM.view()
 ```
 
 
-    A Jupyter Widget
+![alt text](img1.png")
+
 
 
 ### Fitting features is 'simple'
@@ -78,8 +66,8 @@ create_custom(name=<name to assign custom>, column=<source column to apply to>,d
 
 
 ```python
-custom_dict = {**{key:1 for key in range(16,25)}, 
-                **{key:2 for key in range(25,42)}, 
+custom_dict = {**{key:1 for key in range(16,25)},
+                **{key:2 for key in range(25,42)},
                 **{key:3 for key in range(42,51)}}
 
 MyGLM.create_custom(name='Age_c1', column='Age',dictionary=custom_dict)
@@ -89,7 +77,7 @@ MyGLM.view()
 ```
 
 
-    A Jupyter Widget
+![alt text](img2.png")
 
 
 ### Variates
@@ -110,7 +98,7 @@ MyGLM.view()
 ```
 
 
-    A Jupyter Widget
+![alt text](img3.png")
 
 
 ### Offsets?  No problem
@@ -140,10 +128,10 @@ MyGLM.view()
 ```
 
 
-    A Jupyter Widget
+![alt text](img4.png")
 
 
-### Two way Actual vs Expected 
+### Two way Actual vs Expected
 To see interactions more easily, look at the two_way actual vs. expected chart.
 
 
@@ -153,10 +141,4 @@ MyGLM.two_way('Age','Gender')
 
 
 
-<div class="bk-root">
-    <div class="bk-plotdiv" id="9a486365-dce0-488a-bc08-896f4f3a48ee"></div>
-</div>
-
-
-
-
+![alt text](img5.png")
