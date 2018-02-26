@@ -470,13 +470,13 @@ class GLM():
         p.outline_line_color = None
         outcome = pd.DataFrame(np.divide(np.array(a[response_list]),np.array(a[weight_list]),where=np.array(a[weight_list])>0),columns=['Outcome ' + str(item) for item in list(data[x2].unique())])# add line to secondondary axis
         fitted = pd.DataFrame( np.divide(np.array(a[fitted_list]) ,np.array(a[weight_list]),where=np.array(a[weight_list])>0), columns=['Fitted Avg ' + str(item) for item in list(data[x2].unique())])# add line to secondondary axis
-        p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(outcome))/1.1, end=np.max(np.array(outcome))*1.1)}
+        
         p.xaxis[0].axis_label = x1
         p.yaxis[0].axis_label = self.weight + ' ' + weight_label
-        
+        p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
         p.add_layout(Title(text= x1 + ' vs ' + x2, text_font_size="12pt", align='left'), 'above')
         if pdp == False:
-            p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
+            p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(outcome))/1.1, end=np.max(np.array(outcome))*1.1)}
             for i in range(len(outcome.columns)):
                 p.line(x = a[x1], 
                                y = outcome.iloc[:,i],
