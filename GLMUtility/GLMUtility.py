@@ -63,6 +63,10 @@ class GLM():
         return base_dict
 
     def set_PDP(self):
+        '''
+        This function creates a dataset for the prtial dependence plots.  We identify the base
+        level of each feature, and then vary the levels of the desired feature in our predictions
+        '''
         PDP = {}
         simple = [item for item in self.transformed_data.columns if item in self.independent]
         for item in simple:
@@ -125,6 +129,8 @@ class GLM():
             return series
 
     def extract_params(self):
+        ''' Returns the summary statistics from the statsmodel GLM.
+        '''
         summary = pd.read_html(self.results.summary().__dict__['tables'][1].as_html(), header=0)[0].iloc[:,0]
         out = pd.DataFrame()
         out['field'] = summary.str.split(",").str[0].str.replace('C\(','')
@@ -231,8 +237,9 @@ class GLM():
             for i in range(len(self.formula['customs'])):
                 name = self.formula['customs'][i]
                 temp = data[self.customs[name]['source']].map(self.customs[name]['dictionary'])
-                temp = pd.get_dummies(temp.to_frame())
-                temp = temp[list(self.customs[name]['Z'].columns)]
+                temp.name = name
+                #temp = pd.get_dummies(temp.to_frame())
+                #temp = temp[list(self.customs[name]['Z'].columns)] # What does this even do?
                 transformed_data = pd.concat((transformed_data, temp), axis=1)
             # Create offsets in data transformation for new datasets?
             transformed_data['offset'] = 0
@@ -341,6 +348,9 @@ class GLM():
             if temp[self.weight].max()*1.8 <1000:
                 scale = 1
                 weight_label = ''
+            else:
+                scale = 1
+                weight_label = ''
             temp[self.weight] = temp[self.weight]/scale
             y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
             if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
@@ -427,7 +437,7 @@ class GLM():
         return test4
 
 
-    def two_way(self, x1, x2):
+    def two_way(self, x1, x2, pdp=False):
         data = self.transformed_data
         a = pd.pivot_table(data, index=x1, columns=x2, values=[self.weight,self.dependent, 'Fitted Avg'], aggfunc='sum').reset_index()
         #print(a.head())
@@ -446,10 +456,11 @@ class GLM():
         if max(np.sum(a[weight_list],axis=1))*1.8 <1000:
             scale = 1
             weight_label = ''
+        else:
+            scale = 1
+            weight_label = ''
         a[weight_list] = a[weight_list]/scale
-        source= ColumnDataSource(a)
-        
-        
+        source= ColumnDataSource(a)           
         p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False)
         p.vbar_stack(stackers=weight_list, 
                      x=x1, source=source, width=0.9, alpha=[0.5]*len(weight_list), color=(Spectral9*100)[:len(weight_list)], legend = [str(item) for item in list(self.data[x2].unique())])
@@ -462,22 +473,38 @@ class GLM():
         p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(outcome))/1.1, end=np.max(np.array(outcome))*1.1)}
         p.xaxis[0].axis_label = x1
         p.yaxis[0].axis_label = self.weight + ' ' + weight_label
-        p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
+        
         p.add_layout(Title(text= x1 + ' vs ' + x2, text_font_size="12pt", align='left'), 'above')
-        for i in range(len(outcome.columns)):
-            p.line(x = a[x1], 
-                           y = outcome.iloc[:,i],
-                          line_width=3,
-                           color=(Spectral9*100)[i],
-                          line_cap='round',
-                          line_alpha=1, y_range_name="foo")
-        for i in range(len(fitted.columns)):
-            p.line(x = a[x1], 
-                           y = fitted.iloc[:,i],
-                          line_width=3,
-                           color=(Spectral9*100)[i],
-                          line_cap='round',
-                          line_dash='dashed',
-                          line_alpha=1, y_range_name="foo")
+        if pdp == False:
+            p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
+            for i in range(len(outcome.columns)):
+                p.line(x = a[x1], 
+                               y = outcome.iloc[:,i],
+                              line_width=3,
+                               color=(Spectral9*100)[i],
+                              line_cap='round',
+                              line_alpha=.9, y_range_name="foo")
+            for i in range(len(fitted.columns)):
+                p.line(x = a[x1], 
+                               y = fitted.iloc[:,i],
+                              line_width=3,
+                               color=(Spectral9*100)[i],
+                              line_cap='round',
+                              line_dash='dashed',
+                              line_alpha=1, y_range_name="foo")
+        if pdp == True:
+            pdp = np.transpose([np.tile(self.PDP[x1].index, len(self.PDP[x2].index)), np.repeat(self.PDP[x2].index, len(self.PDP[x1].index))])
+            pdp = pd.DataFrame(pdp, columns = [x1,x2])
+            pdp = (((self.PDP[x1].reset_index().drop(x2,axis=1)).merge(pdp, how='inner', left_on=x1, right_on=x1))[self.independent]).to_clipboard()
+            x = self.predict(pdp)
+            x = pd.pivot_table(x, index=[x1],columns=[x2], values=['Fitted Avg'], aggfunc='mean')   
+            p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(x))/1.1, end=np.max(np.array(x))*1.1)}
+            for i in range(len(x.columns)):
+                p.line(x = a[x1], 
+                               y = x.iloc[:,i],
+                              line_width=3,
+                               color=(Spectral9*100)[i],
+                              line_cap='round',
+                              line_alpha=1, y_range_name="foo")
         p.xaxis.major_label_orientation = math.pi/4
         show(p)
