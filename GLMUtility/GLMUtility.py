@@ -357,7 +357,7 @@ class GLM():
                 p = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False)
             else:
                 p = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False)
-            
+
             # setting bar values
             p.add_layout(Title(text= var, text_font_size="12pt", align='center'), 'above')
             p.yaxis[0].axis_label = self.weight + ' ' + weight_label
@@ -393,6 +393,8 @@ class GLM():
 
 
     def lift_chart(self, data=None):
+        ''' 10 Decile lift chart
+        '''
         if data is None:
             data = self.transformed_data
         else:
@@ -406,7 +408,7 @@ class GLM():
         temp['Observed'] = temp[self.dependent]/temp[self.weight]
         temp['Fitted'] = temp['Fitted Avg']/temp[self.weight]
         y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart") #, x_range=list(temp.index)
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart", toolbar_sticky=False) #, x_range=list(temp.index)
         h = np.array(temp[self.weight])
         # Correcting the bottom position of the bars to be on the 0 line.
         adj_h = h/2
@@ -420,6 +422,85 @@ class GLM():
         p.line(temp.index, temp['Fitted'], line_width=2, color="#006400", y_range_name="foo")
         show(p)
 
+    def head_to_head(self, challenger, data = None):
+        '''Two way lift chart that is sorted by difference between Predicted
+        scores.  Still bucketed to 10 levels with the same approximate weight
+        '''
+        if data is None:
+            data1 = self.transformed_data
+            data2 = challenger.predict(self.data)
+        else:
+            data1 = self.predict(data)
+            data2 = challenger.predict(data)
+        temp = data1[[self.weight, self.dependent, 'Fitted Avg']]
+        data2['Fitted Avg Challenger'] = data2['Fitted Avg']
+        data2 = data2[['Fitted Avg Challenger']]
+        temp = copy.deepcopy(temp)
+        temp = temp.merge(data2, how='inner', left_index=True, right_index=True)
+
+        temp['sort'] = temp['Fitted Avg']/temp['Fitted Avg Challenger']
+        temp = temp.sort_values('sort')
+        temp['decile'] = (temp[self.weight].cumsum()/((sum(temp[self.weight])*1.00001)/10)+1).apply(np.floor)
+        temp = pd.pivot_table(data=temp, index=['decile'], values=[self.dependent, self.weight, 'Fitted Avg', 'Fitted Avg Challenger'], aggfunc='sum')
+        temp['Observed'] = temp[self.dependent]/temp[self.weight]
+        temp['Fitted1'] = temp['Fitted Avg']/temp[self.weight]
+        temp['Fitted2'] = temp['Fitted Avg Challenger']/temp[self.weight]
+        y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Head to Head", toolbar_sticky=False) #, x_range=list(temp.index)
+        h = np.array(temp[self.weight])
+        # Correcting the bottom position of the bars to be on the 0 line.
+        adj_h = h/2
+        # add bar renderer
+        p.rect(x=temp.index, y=adj_h, width=0.4, height=h, color="#e5e500")
+        # add line to secondondary axis
+        p.extra_y_ranges = {"foo": Range1d(start=min(temp['Observed'].min(), temp['Fitted1'].min(), temp['Fitted2'].min())/1.1, end=max(temp['Observed'].max(), temp['Fitted1'].max(),temp['Fitted2'].max())*1.1)}
+        p.add_layout(LinearAxis(y_range_name="foo"), 'right')
+        # Observed Average line values
+        p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
+        p.line(temp.index, temp['Fitted1'], line_width=2, color="#006400", y_range_name="foo")
+        p.line(temp.index, temp['Fitted2'], line_width=2, color="#146195", y_range_name="foo")
+        show(p)
+
+
+
+
+    def gini(self, data=None):
+        ''' This code was shamelessly lifted from Kaggle
+        https://www.kaggle.com/jpopham91/gini-scoring-simple-and-efficient
+        Simple implementation of the (normalized) gini score in numpy
+        Fully vectorized, no python loops, zips, etc.
+        Significantly (>30x) faster than previous implementions
+
+        '''
+        if data is None:
+            data = self.transformed_data
+        else:
+            data = self.predict(data)
+        # assign y_true, y_pred
+        y_true = data[self.dependent]
+        y_pred = data['Fitted Avg']
+        # check and get number of samples
+        assert y_true.shape == y_pred.shape
+        n_samples = y_true.shape[0]
+
+        # sort rows on prediction column
+        # (from largest to smallest)
+        arr = np.array([y_true, y_pred]).transpose()
+        true_order = arr[arr[:,0].argsort()][::-1,0]
+        pred_order = arr[arr[:,1].argsort()][::-1,0]
+
+        # get Lorenz curves
+        L_true = np.cumsum(true_order) / np.sum(true_order)
+        L_pred = np.cumsum(pred_order) / np.sum(pred_order)
+        L_ones = np.linspace(1/n_samples, 1, n_samples)
+
+        # get Gini coefficients (area between curves)
+        G_true = np.sum(L_ones - L_true)
+        G_pred = np.sum(L_ones - L_pred)
+
+        # normalize to true Gini coefficient
+        return G_pred/G_true
+
     def __repr__(self):
         return self.results.summary()
 
@@ -427,7 +508,8 @@ class GLM():
         return self.results.summary()
 
     def perfect_correlation(self):
-        # Examining correlation of factor levels
+        ''' Examining correlation of factor levels
+        '''
         test = self.transformed_data[list(set(self.fitted_factors['customs']+self.fitted_factors['simple']))]
         test2 = pd.get_dummies(test).corr()
         test3 = pd.concat((pd.concat((pd.Series(np.repeat(np.array(test2.columns),test2.shape[1]),name='v1').to_frame(),
@@ -438,6 +520,9 @@ class GLM():
 
 
     def two_way(self, x1, x2, pdp=False):
+        ''' Two way (two features from independent list) view of data
+        TODO: let this work for custom factors too.
+        '''
         data = self.transformed_data
         a = pd.pivot_table(data, index=x1, columns=x2, values=[self.weight,self.dependent, 'Fitted Avg'], aggfunc='sum').reset_index()
         #print(a.head())
@@ -460,9 +545,9 @@ class GLM():
             scale = 1
             weight_label = ''
         a[weight_list] = a[weight_list]/scale
-        source= ColumnDataSource(a)           
+        source= ColumnDataSource(a)
         p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False)
-        p.vbar_stack(stackers=weight_list, 
+        p.vbar_stack(stackers=weight_list,
                      x=x1, source=source, width=0.9, alpha=[0.5]*len(weight_list), color=(Spectral9*100)[:len(weight_list)], legend = [str(item) for item in list(self.data[x2].unique())])
         p.y_range = Range1d(0, max(np.sum(a[weight_list],axis=1))*1.8)
         p.xaxis[0].axis_label = x1
@@ -470,7 +555,7 @@ class GLM():
         p.outline_line_color = None
         outcome = pd.DataFrame(np.divide(np.array(a[response_list]),np.array(a[weight_list]),where=np.array(a[weight_list])>0),columns=['Outcome ' + str(item) for item in list(data[x2].unique())])# add line to secondondary axis
         fitted = pd.DataFrame( np.divide(np.array(a[fitted_list]) ,np.array(a[weight_list]),where=np.array(a[weight_list])>0), columns=['Fitted Avg ' + str(item) for item in list(data[x2].unique())])# add line to secondondary axis
-        
+
         p.xaxis[0].axis_label = x1
         p.yaxis[0].axis_label = self.weight + ' ' + weight_label
         p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
@@ -478,14 +563,14 @@ class GLM():
         if pdp == False:
             p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(outcome))/1.1, end=np.max(np.array(outcome))*1.1)}
             for i in range(len(outcome.columns)):
-                p.line(x = a[x1], 
+                p.line(x = a[x1],
                                y = outcome.iloc[:,i],
                               line_width=3,
                                color=(Spectral9*100)[i],
                               line_cap='round',
                               line_alpha=.9, y_range_name="foo")
             for i in range(len(fitted.columns)):
-                p.line(x = a[x1], 
+                p.line(x = a[x1],
                                y = fitted.iloc[:,i],
                               line_width=3,
                                color=(Spectral9*100)[i],
@@ -497,10 +582,10 @@ class GLM():
             pdp = pd.DataFrame(pdp, columns = [x1,x2])
             pdp = (((self.PDP[x1].reset_index().drop(x2,axis=1)).merge(pdp, how='inner', left_on=x1, right_on=x1))[self.independent]).to_clipboard()
             x = self.predict(pdp)
-            x = pd.pivot_table(x, index=[x1],columns=[x2], values=['Fitted Avg'], aggfunc='mean')   
+            x = pd.pivot_table(x, index=[x1],columns=[x2], values=['Fitted Avg'], aggfunc='mean')
             p.extra_y_ranges = {"foo": Range1d(start=np.min(np.array(x))/1.1, end=np.max(np.array(x))*1.1)}
             for i in range(len(x.columns)):
-                p.line(x = a[x1], 
+                p.line(x = a[x1],
                                y = x.iloc[:,i],
                               line_width=3,
                                color=(Spectral9*100)[i],
