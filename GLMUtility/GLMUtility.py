@@ -9,9 +9,11 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from bokeh.plotting import figure
-from bokeh.io import output_notebook, show
+from bokeh.io import output_notebook, show, output_file
+from bokeh.layouts import gridplot
 from bokeh.models import LinearAxis, Range1d, ColumnDataSource, Title
 from bokeh.palettes import Spectral9
+from bokeh.models import HoverTool, NumeralTickFormatter
 import math
 
 import ipywidgets as widgets
@@ -22,6 +24,8 @@ output_notebook()
 class GLM():
     def __init__(self, data, independent, dependent, weight, family='Poisson', link='Log', scale='X2'):
         self.data = data
+        # make it a list of one if user only passed a single column
+        independent = independent if isinstance(independent, list) else [independent]
         self.independent = independent
         self.dependent = dependent
         self.weight = weight
@@ -40,6 +44,8 @@ class GLM():
         self.fitted_factors = {'simple':[], 'customs':[], 'variates':[],'interactions':[],'offsets':[]}
         self.transformed_data = self.data[[self.weight] + [self.dependent]]
         self.formula = {}
+        self.comparisons = []
+        self.lifts = []
         self.model = None
         self.results = None
 
@@ -149,6 +155,7 @@ class GLM():
         sub_dict['alpha'] = alpha
         sub_dict['source'] = column
         sub_dict['degree'] = degree
+        sub_dict['dictionary'] = dictionary
         self.variates[name] = sub_dict
 
     def create_custom(self, name, column, dictionary):
@@ -231,7 +238,7 @@ class GLM():
             transformed_data = data[list(set(data.columns).intersection(self.independent+[self.weight] + [self.dependent]))]
             for i in range(len(self.formula['variates'])):
                 name = self.formula['variates'][i]
-                temp = pd.DataFrame(self.ortho_poly_predict(x=data[self.variates[name]['source']], variate=name),
+                temp = pd.DataFrame(self.ortho_poly_predict(x=data[self.variates[name]['source']].map(self.variates[name]['dictionary']), variate=name),
                                     columns=[name + '_p' + str(idx) for idx in range(self.variates[name]['degree'] + 1)])
                 transformed_data = pd.concat((transformed_data, temp), axis=1)
             for i in range(len(self.formula['customs'])):
@@ -339,28 +346,17 @@ class GLM():
             else:
                 for item in ['Observed','Fitted']:
                     temp[item] = self.link_transform(temp[item],'linear predictor')
-            if temp[self.weight].max()*1.8 <10000000:
-                scale = 1000000
-                weight_label = '(Millions)'
-            if temp[self.weight].max()*1.8 <1000000:
-                scale = 1000
-                weight_label = '(Thousands)'
-            if temp[self.weight].max()*1.8 <1000:
-                scale = 1
-                weight_label = ''
-            else:
-                scale = 1
-                weight_label = ''
-            temp[self.weight] = temp[self.weight]/scale
             y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
+            hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
             if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
-                p = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False)
+                p = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
             else:
-                p = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False)
+                p = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
 
             # setting bar values
             p.add_layout(Title(text= var, text_font_size="12pt", align='center'), 'above')
-            p.yaxis[0].axis_label = self.weight + ' ' + weight_label
+            p.yaxis[0].axis_label = self.weight
+            p.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
             p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
             h = np.array(temp[self.weight])
             # Correcting the bottom position of the bars to be on the 0 line.
@@ -392,13 +388,15 @@ class GLM():
         return widgets.VBox((widgets.HBox((var,transform)), widgets.HBox((obs, fitted,model, ci)),vw.children[-1]))
 
 
-    def lift_chart(self, data=None):
+    def lift_chart(self, data=None, title='', table=False, dont_show_give=False):
         ''' 10 Decile lift chart
         '''
         if data is None:
             data = self.transformed_data
         else:
             data = self.predict(data)
+            data['Fitted Avg'] = data['Fitted Avg'] * data[self.weight]
+        #data = data.reset_index()
         temp = data[[self.weight, self.dependent, 'Fitted Avg']]
         temp = copy.deepcopy(temp)
         temp['sort'] = temp['Fitted Avg']/temp[self.weight]
@@ -408,7 +406,8 @@ class GLM():
         temp['Observed'] = temp[self.dependent]/temp[self.weight]
         temp['Fitted'] = temp['Fitted Avg']/temp[self.weight]
         y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart", toolbar_sticky=False) #, x_range=list(temp.index)
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart", toolbar_sticky=False, tools=[hover]) #, x_range=list(temp.index)
         h = np.array(temp[self.weight])
         # Correcting the bottom position of the bars to be on the 0 line.
         adj_h = h/2
@@ -416,22 +415,32 @@ class GLM():
         p.rect(x=temp.index, y=adj_h, width=0.4, height=h, color="#e5e500")
         # add line to secondondary axis
         p.extra_y_ranges = {"foo": Range1d(start=min(temp['Observed'].min(), temp['Fitted'].min())/1.1, end=max(temp['Observed'].max(), temp['Fitted'].max())*1.1)}
+        if title != '':
+            p.add_layout(Title(text = title, text_font_size="12pt", align='center'), 'above')
         p.add_layout(LinearAxis(y_range_name="foo"), 'right')
         # Observed Average line values
         p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
         p.line(temp.index, temp['Fitted'], line_width=2, color="#006400", y_range_name="foo")
-        show(p)
+        if table:
+            return temp
+        elif dont_show_give:
+            return p
+        else:
+            show(p)
 
-    def head_to_head(self, challenger, data = None):
+    def head_to_head(self, challenger, data=None, table=False):
         '''Two way lift chart that is sorted by difference between Predicted
         scores.  Still bucketed to 10 levels with the same approximate weight
         '''
         if data is None:
             data1 = self.transformed_data
             data2 = challenger.predict(self.data)
+            data2['Fitted Avg'] = data2['Fitted Avg'] * data2[self.weight]
         else:
             data1 = self.predict(data)
+            data1['Fitted Avg'] = data1['Fitted Avg'] * data1[self.weight]
             data2 = challenger.predict(data)
+            data2['Fitted Avg'] = data2['Fitted Avg'] * data2[self.weight]
         temp = data1[[self.weight, self.dependent, 'Fitted Avg']]
         data2['Fitted Avg Challenger'] = data2['Fitted Avg']
         data2 = data2[['Fitted Avg Challenger']]
@@ -446,7 +455,8 @@ class GLM():
         temp['Fitted1'] = temp['Fitted Avg']/temp[self.weight]
         temp['Fitted2'] = temp['Fitted Avg Challenger']/temp[self.weight]
         y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Head to Head", toolbar_sticky=False) #, x_range=list(temp.index)
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Head to Head", toolbar_sticky=False, tools=[hover]) #, x_range=list(temp.index)
         h = np.array(temp[self.weight])
         # Correcting the bottom position of the bars to be on the 0 line.
         adj_h = h/2
@@ -459,7 +469,11 @@ class GLM():
         p.line(temp.index, temp['Observed'], line_width=2, color="#ff69b4",  y_range_name="foo")
         p.line(temp.index, temp['Fitted1'], line_width=2, color="#006400", y_range_name="foo")
         p.line(temp.index, temp['Fitted2'], line_width=2, color="#146195", y_range_name="foo")
-        show(p)
+        p.legend.location = "top_left"
+        if table==False:
+            show(p)
+        else:
+            return temp
 
 
 
@@ -519,36 +533,24 @@ class GLM():
         return test4
 
 
-    def two_way(self, x1, x2, pdp=False):
+    def two_way(self, x1, x2, pdp=False, table=False):
         ''' Two way (two features from independent list) view of data
         TODO: let this work for custom factors too.
         '''
         data = self.transformed_data
-        a = pd.pivot_table(data, index=x1, columns=x2, values=[self.weight,self.dependent, 'Fitted Avg'], aggfunc='sum').reset_index()
+        a = pd.pivot_table(data, index=x1, columns=x2, values=[self.weight,self.dependent, 'Fitted Avg'], aggfunc='sum').fillna(0).reset_index()
         #print(a.head())
-        response_list = [self.dependent + ' ' + str(item) for item in (data[x2].unique())]
-        fitted_list = ['Fitted Avg ' + str(item) for item in (data[x2].unique())]
+        response_list = [self.dependent + ' ' + str(item).strip() for item in (data[x2].unique())]
+        fitted_list = ['Fitted Avg ' + str(item).strip() for item in (data[x2].unique())]
         a.columns = [' '.join([str(i) for i in col]).strip() for col in a.columns.values]
         a = a.fillna(0)
         a[x1] = a[x1].astype(str)
-        weight_list = [self.weight + ' ' + str(item) for item in data[x2].unique()]
-        if max(np.sum(a[weight_list],axis=1))*1.8 <10000000:
-            scale = 1000000
-            weight_label = '(Millions)'
-        if max(np.sum(a[weight_list],axis=1))*1.8 <1000000:
-            scale = 1000
-            weight_label = '(Thousands)'
-        if max(np.sum(a[weight_list],axis=1))*1.8 <1000:
-            scale = 1
-            weight_label = ''
-        else:
-            scale = 1
-            weight_label = ''
-        a[weight_list] = a[weight_list]/scale
+        weight_list = [self.weight + ' ' + str(item).strip() for item in data[x2].unique()]
         source= ColumnDataSource(a)
-        p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False)
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
         p.vbar_stack(stackers=weight_list,
-                     x=x1, source=source, width=0.9, alpha=[0.5]*len(weight_list), color=(Spectral9*100)[:len(weight_list)], legend = [str(item) for item in list(self.data[x2].unique())])
+                     x=x1, source=source, width=0.9, alpha=[0.5]*len(weight_list), color=(Spectral9*100)[:len(weight_list)], legend = [str(item) for item in list(data[x2].unique())])
         p.y_range = Range1d(0, max(np.sum(a[weight_list],axis=1))*1.8)
         p.xaxis[0].axis_label = x1
         p.xgrid.grid_line_color = None
@@ -557,7 +559,8 @@ class GLM():
         fitted = pd.DataFrame( np.divide(np.array(a[fitted_list]) ,np.array(a[weight_list]),where=np.array(a[weight_list])>0), columns=['Fitted Avg ' + str(item) for item in list(data[x2].unique())])# add line to secondondary axis
 
         p.xaxis[0].axis_label = x1
-        p.yaxis[0].axis_label = self.weight + ' ' + weight_label
+        p.yaxis[0].axis_label = self.weight
+        p.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
         p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
         p.add_layout(Title(text= x1 + ' vs ' + x2, text_font_size="12pt", align='left'), 'above')
         if pdp == False:
@@ -592,4 +595,160 @@ class GLM():
                               line_cap='round',
                               line_alpha=1, y_range_name="foo")
         p.xaxis.major_label_orientation = math.pi/4
-        show(p)
+        if table == True:
+            return a
+        else:
+            show(p)
+
+    def create_comparisons(self, columns, title='', obs=True, fitted=True, model=True, ci=True, ret=False):
+        def view_one_way(transform, column, title, obs, fitted, model, ci):
+            data = self.transformed_data[[self.dependent, self.weight,'Fitted Avg',column]]
+            temp = pd.pivot_table(data=data, index=[column], values=[self.dependent, self.weight, 'Fitted Avg'], aggfunc=np.sum)
+            temp['Observed'] = temp[self.dependent]/temp[self.weight]
+            temp['Fitted'] = temp['Fitted Avg']/temp[self.weight]
+            temp = temp.merge(self.PDP[column][['Model','CI_U','CI_L']], how='inner', left_index=True, right_index=True)
+            if transform == 'Predicted Value':
+                for item in ['Model','CI_U','CI_L']:
+                    temp[item] = self.link_transform(temp[item],'predicted value')
+            else:
+                for item in ['Observed','Fitted']:
+                    temp[item] = self.link_transform(temp[item],'linear predictor')
+
+            y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
+            hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+            if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
+                f = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+            else:
+                f = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+
+            # setting bar values
+            f.add_layout(Title(text = title + column, text_font_size="12pt", align='center'), 'above')
+            f.yaxis[0].axis_label = self.weight
+            f.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
+            f.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
+            h = np.array(temp[self.weight])
+
+            # Correcting the bottom position of the bars to be on the 0 line.
+            adj_h = h/2
+
+            # add bar renderer
+            f.rect(x=temp.index, y=adj_h, width=0.4, height=h, color="#e5e500")
+
+            # add line to secondondary axis
+            f.extra_y_ranges = {'foo': Range1d(start=min(temp['Observed'].min(), temp['Model'].min())/1.1, end=max(temp['Observed'].max(), temp['Model'].max())*1.1)}
+
+            # Observed Average line values
+            if obs == True:
+                f.line(temp.index, temp['Observed'], line_width=2, color='#ff69b4',  y_range_name='foo')
+            if fitted == True:
+                f.line(temp.index, temp['Fitted'], line_width=2, color='#006400', y_range_name='foo')
+            if model == True:
+                f.line(temp.index, temp['Model'], line_width=2, color="#00FF00", y_range_name="foo")
+            if ci == True:
+                f.line(temp.index, temp['CI_U'], line_width=2, color="#db4437", y_range_name="foo")
+                f.line(temp.index, temp['CI_L'], line_width=2, color="#db4437", y_range_name="foo")
+            f.xaxis.major_label_orientation = math.pi/4
+            return f
+
+        transform = 'Predicted Value'
+        title = title + ' | ' if title != '' else title
+        columns = columns if isinstance(columns, list) else [columns]
+        comparisons = []
+        for column in columns:
+            self.comparisons.append(view_one_way(transform=transform, column=column, title=title, obs=obs, fitted=fitted, model=model, ci=ci))
+            comparisons.append(self.comparisons[-1])
+        if ret:
+            return comparisons
+
+    def view_comparisons(self, file_name=None, ncols=2, reorder=[]):
+        def reorder_comparisons(order):
+            if max([x for x in order if x is not None])+1 != len(self.comparisons) or min([x for x in order if x is not None]) != 0:
+                error = ''' Error, unable to reorder list because the count of reorder is not equal to the number of comparisons.
+                            Use get_comparisons_count() then reorder the list that way. For instance: for a comparison count of 3
+                            you may wish to do this reorder_comparisons([0,2,1]). in this case you need it to go from 0 to ''' + str(len(self.comparisons)-1) + '. you can also add None into the list to make a blank space.'
+                return error
+            comparisons = []
+            for item in order:
+                if item == None:
+                    comparisons.append(None)
+                else:
+                    comparisons.append(self.comparisons[item])
+            return comparisons
+
+        if file_name:
+            output_file(file_name + '.html')
+
+        if len(self.comparisons) > 0:
+            p = gridplot(self.comparisons, ncols=ncols) if reorder == [] else gridplot(reorder_comparisons(reorder), ncols=ncols)
+            # bad way of labeling the columns: can't figure out rows anway
+            #toggle1 = Toggle(label=category_one, width=800)
+            #toggle2 = Toggle(label=category_two, width=800)
+            # show the results
+            #show(layout([toggle2, toggle1], [p]))
+            show(p)
+        else:
+            print('You must create_comparisons(colums) first, before you can view_comparisons(file_name,ncols). Then you can clear_comparisons().')
+
+    def clear_comparisons(self):
+        self.comparisons = []
+
+    def get_comparisons(self):
+        return self.comparisons
+
+    def get_comparisons_count(self):
+        return len(self.comparisons)
+
+    def give_comparisons(self, comparison_list):
+        for each_comparison in comparison_list:
+            self.comparisons.append(each_comparison)
+
+
+    def create_lift(self, data=None, title='', ret=False):
+        if data is not None:
+            data = data.reset_index()
+        lift = self.lift_chart(data=None, title=title, dont_show_give=True)
+        self.lifts.append(lift)
+        if ret:
+            return [lift]
+
+    def view_lifts(self, file_name=None, ncols=2, reorder=[]):
+        def reorder_lifts(order):
+            if max([x for x in order if x is not None])+1 != len(self.lifts) or min([x for x in order if x is not None]) != 0:
+                error = ''' Error, unable to reorder list because the count of reorder is not equal to the number of comparisons.
+                            Use get_comparisons_count() then reorder the list that way. For instance: for a comparison count of 3
+                            you may wish to do this reorder_comparisons([0,2,1]). in this case you need it to go from 0 to ''' + str(len(self.lifts)-1) + '. you can also add None into the list to make a blank space.'
+                return error
+            lifts = []
+            for item in order:
+                if item == None:
+                    lifts.append(None)
+                else:
+                    lifts.append(self.lifts[item])
+            return lifts
+
+        if file_name:
+            output_file(file_name + '.html')
+
+        if len(self.lifts) > 0:
+            p = gridplot(self.lifts, ncols=ncols) if reorder == [] else gridplot(reorder_lifts(reorder), ncols=ncols)
+            # bad way of labeling the columns: can't figure out rows anway
+            #toggle1 = Toggle(label=category_one, width=800)
+            #toggle2 = Toggle(label=category_two, width=800)
+            # show the results
+            #show(layout([toggle2, toggle1], [p]))
+            show(p)
+        else:
+            print('You must create_lift() first, before you can view_lifts(file_name,ncols). Then you can clear_lifts().')
+
+    def clear_lifts(self):
+        self.lifts = []
+
+    def get_lifts(self):
+        return self.lifts
+
+    def get_lifts_count(self):
+        return len(self.lifts)
+
+    def give_lifts(self, lift_list):
+        for each_lift in lift_list:
+            self.lifts.append(each_lift)
