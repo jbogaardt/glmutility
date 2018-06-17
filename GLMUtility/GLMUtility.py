@@ -70,7 +70,7 @@ class GLM():
 
     def set_PDP(self):
         '''
-        This function creates a dataset for the prtial dependence plots.  We identify the base
+        This function creates a dataset for the partial dependence plots.  We identify the base
         level of each feature, and then vary the levels of the desired feature in our predictions
         '''
         PDP = {}
@@ -145,6 +145,23 @@ class GLM():
         out['CI offset'] = self.results.__dict__['_results'].__dict__['_cache']['bse']*1.95996398454005
         return out
 
+    def score_detail(self, data, key_column):
+        ''' Gets score detail for factor transparency
+            DO NOT USE for anything other than Log Link
+            Also not tested on Interactions and offsets'''
+        source_fields = self.formula['source_fields']
+        intercept_index = self.base_dict[source_fields[0]].replace('\'','') if type(self.base_dict[source_fields[0]]) is str else self.base_dict[source_fields[0]]
+        intercept = np.exp(self.PDP[source_fields[0]]['Model'].loc[intercept_index])
+
+        out_data = pd.DataFrame()
+        out_data[key_column] = data[key_column]
+        for item in source_fields:
+            out_data[item + ' value'] = data[item]
+            out_data[item + ' model'] = np.round(np.exp(data[item].map(dict(self.PDP[item]['Model'])))/intercept,4)
+        [item for item in out_data.columns if item[-5:]=='model']
+        out_data['Total model'] = np.round(np.product(out_data[[item for item in out_data.columns if item[-5:]=='model']],axis=1),4)
+        return out_data
+
     def create_variate(self, name, column, degree, dictionary={}):
         sub_dict = {}
         Z, norm2, alpha = self.ortho_poly_fit(x = self.data[column], degree=degree, dictionary=dictionary)
@@ -167,17 +184,31 @@ class GLM():
     def fit(self, simple=[], customs=[], variates=[], interactions=[], offsets=[]):
         link_dict = {'Identity':sm.families.links.identity,
                      'Log':sm.families.links.log,
-                     'Logit':sm.families.links.logit}
+                     'Logit':sm.families.links.logit,
+                     'Square':sm.families.links.sqrt,
+                     'Probit':sm.families.links.probit,
+                     'Cauchy':sm.families.links.cauchy,
+                     'Cloglog':sm.families.links.cloglog,
+                     'Inverse':sm.families.links.inverse_power}
         link = link_dict[self.link]
-        family_dict = {'Poisson':sm.families.Poisson(link),
-                       'Binomial':sm.families.Binomial(link),
-                       'Normal':sm.families.Gaussian(link),
-                       'Gaussian':sm.families.Gaussian(link),
-                       'Gamma':sm.families.Gamma(link)
-                       }
+        if self.family == 'Poisson':
+            error_term = sm.families.Poisson(link)
+        elif self.family == 'Binomial':
+            error_term = sm.families.Binomial(link)
+        elif self.family == 'Normal':
+            error_term = sm.families.Gaussian(link)
+        elif self.family == 'Gaussian':
+            error_term = sm.families.Gaussian(link)
+        elif self.family == 'Gamma':
+            error_term = sm.families.Gamma(link)
+        #family_dict = {'Poisson':sm.families.Poisson(link),
+        #               'Binomial':sm.families.Binomial(link),
+        #               'Normal':sm.families.Gaussian(link),
+        #               'Gaussian':sm.families.Gaussian(link),
+        #               'Gamma':sm.families.Gamma(link)}
         self.set_formula(simple=simple, customs=customs, variates=variates, interactions=interactions, offsets=offsets)
         self.transformed_data = self.transform_data()
-        self.model = sm.GLM.from_formula(formula=self.formula['formula'] , data=self.transformed_data, family=family_dict[self.family], freq_weights=self.transformed_data[self.weight], offset=self.transformed_data['offset'])
+        self.model = sm.GLM.from_formula(formula=self.formula['formula'] , data=self.transformed_data, family=error_term, freq_weights=self.transformed_data[self.weight], offset=self.transformed_data['offset'])
         self.results = self.model.fit(scale=self.scale)
         fitted = self.results.predict(self.transformed_data, offset=self.transformed_data['offset'])*self.transformed_data[self.weight]
         fitted.name="Fitted Avg"
@@ -215,6 +246,9 @@ class GLM():
         # Intercept only model
         if simple_str + variate_str + custom_str + interaction_str == '':
             self.formula['formula'] = self.formula['formula'] + '1'
+        self.formula['source_fields'] = list(set(self.formula['simple'] +
+            [self.customs[item]['source'] for item in self.formula['customs']] +
+            [self.variates[item]['source'] for item in self.formula['variates']]))
 
     def transform_data(self, data=None):
         if data is None:
@@ -347,16 +381,17 @@ class GLM():
                 for item in ['Observed','Fitted']:
                     temp[item] = self.link_transform(temp[item],'linear predictor')
             y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-            hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+            hover = HoverTool(tooltips=[('(x,y)','($x{0.00 a}, $y{0.00 a})')], mode='mouse')#'vline')
             if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
-                p = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+                p = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False)
             else:
-                p = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+                p = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False)
 
             # setting bar values
+            p.add_tools(hover)
             p.add_layout(Title(text= var, text_font_size="12pt", align='center'), 'above')
             p.yaxis[0].axis_label = self.weight
-            p.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
+            p.yaxis[0].formatter = NumeralTickFormatter(format='0.00 a')
             p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
             h = np.array(temp[self.weight])
             # Correcting the bottom position of the bars to be on the 0 line.
@@ -400,14 +435,18 @@ class GLM():
         temp = data[[self.weight, self.dependent, 'Fitted Avg']]
         temp = copy.deepcopy(temp)
         temp['sort'] = temp['Fitted Avg']/temp[self.weight]
-        temp = temp.sort_values('sort')
-        temp['decile'] = (temp[self.weight].cumsum()/((sum(temp[self.weight])*1.00001)/10)+1).apply(np.floor)
+        temp = temp.sort_values('sort', kind='mergesort')
+        #temp['decile'] = (temp[self.weight].cumsum()/((sum(temp[self.weight])*1.00001)/10)+1).apply(np.floor)
+        temp['decile_initial'] = (temp[self.weight].cumsum()/((sum(temp[self.weight])*1.00001)/20)+1).apply(np.floor)
+        decile_map = {1:1,2:2,3:2,4:3,5:3,6:4,7:4,8:5,9:5,10:6,11:6,12:7,13:7,14:8,15:8,16:9,17:9,18:10,19:10,20:11}
+        temp['decile'] = temp['decile_initial'].map(decile_map)
         temp = pd.pivot_table(data=temp, index=['decile'], values=[self.dependent, self.weight, 'Fitted Avg'], aggfunc='sum')
         temp['Observed'] = temp[self.dependent]/temp[self.weight]
         temp['Fitted'] = temp['Fitted Avg']/temp[self.weight]
         y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
-        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart", toolbar_sticky=False, tools=[hover]) #, x_range=list(temp.index)
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.00 a}, $y{0.00 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Lift Chart", toolbar_sticky=False) #, x_range=list(temp.index)
+        p.add_tools(hover)
         h = np.array(temp[self.weight])
         # Correcting the bottom position of the bars to be on the 0 line.
         adj_h = h/2
@@ -455,8 +494,9 @@ class GLM():
         temp['Fitted1'] = temp['Fitted Avg']/temp[self.weight]
         temp['Fitted2'] = temp['Fitted Avg Challenger']/temp[self.weight]
         y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
-        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Head to Head", toolbar_sticky=False, tools=[hover]) #, x_range=list(temp.index)
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.00 a}, $y{0.00 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=700, plot_height=400, y_range=y_range, title="Head to Head", toolbar_sticky=False) #, x_range=list(temp.index)
+        p.add_tools(hover)
         h = np.array(temp[self.weight])
         # Correcting the bottom position of the bars to be on the 0 line.
         adj_h = h/2
@@ -547,8 +587,9 @@ class GLM():
         a[x1] = a[x1].astype(str)
         weight_list = [self.weight + ' ' + str(item).strip() for item in data[x2].unique()]
         source= ColumnDataSource(a)
-        hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
-        p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+        hover = HoverTool(tooltips=[('(x,y)','($x{0.00 a}, $y{0.00 a})')], mode='mouse')#'vline')
+        p = figure(plot_width=800, x_range=list(a[x1]), toolbar_location = 'right', toolbar_sticky=False)
+        p.add_tools(hover)
         p.vbar_stack(stackers=weight_list,
                      x=x1, source=source, width=0.9, alpha=[0.5]*len(weight_list), color=(Spectral9*100)[:len(weight_list)], legend = [str(item) for item in list(data[x2].unique())])
         p.y_range = Range1d(0, max(np.sum(a[weight_list],axis=1))*1.8)
@@ -560,7 +601,7 @@ class GLM():
 
         p.xaxis[0].axis_label = x1
         p.yaxis[0].axis_label = self.weight
-        p.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
+        p.yaxis[0].formatter = NumeralTickFormatter(format='0.00 a')
         p.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
         p.add_layout(Title(text= x1 + ' vs ' + x2, text_font_size="12pt", align='left'), 'above')
         if pdp == False:
@@ -615,16 +656,17 @@ class GLM():
                     temp[item] = self.link_transform(temp[item],'linear predictor')
 
             y_range = Range1d(start=0, end=temp[self.weight].max()*1.8)
-            hover = HoverTool(tooltips=[('(x,y)','($x{0.000 a}, $y{0.000 a})')], mode='mouse')#'vline')
+            hover = HoverTool(tooltips=[('(x,y)','($x{0.00 a}, $y{0.00 a})')], mode='mouse')#'vline')
             if type(temp.index) == pd.core.indexes.base.Index: # Needed for categorical
-                f = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+                f = figure(plot_width=800, y_range=y_range, x_range=list(temp.index), toolbar_location = 'right', toolbar_sticky=False)
             else:
-                f = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False, tools=[hover])
+                f = figure(plot_width=800, y_range=y_range, toolbar_location = 'right', toolbar_sticky=False)
 
             # setting bar values
+            f.add_tools(hover)
             f.add_layout(Title(text = title + column, text_font_size="12pt", align='center'), 'above')
             f.yaxis[0].axis_label = self.weight
-            f.yaxis[0].formatter = NumeralTickFormatter(format='0.000 a')
+            f.yaxis[0].formatter = NumeralTickFormatter(format='0.00 a')
             f.add_layout(LinearAxis(y_range_name="foo", axis_label=self.dependent + '/' + self.weight), 'right')
             h = np.array(temp[self.weight])
 
