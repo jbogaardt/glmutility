@@ -19,12 +19,16 @@ setuptools.setup(
         'Operating System :: OS Independent',
     ],
     install_requires=[
-        'bokeh',
-        'ipywidgets',
         'numpy',
         'pandas',
         'pyyaml',
         'scipy',
         'statsmodels',
     ],
+extras_require={
+        'jupyter': [
+             'bokeh',
+             'ipywidgets',
+         ],
+     }
 )
