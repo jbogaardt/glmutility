@@ -112,6 +112,7 @@ class GLMUtilityBase:
         tweedie_var_power = 1.0,
         glm_config=None,
         additional_fields=None,
+        base_dict_override={}
     ):
         if independent is not None and dependent is not None and weight is not None:
             self.data = data.reset_index().drop("index", axis=1)
@@ -128,7 +129,7 @@ class GLMUtilityBase:
             self.tweedie_var_power = tweedie_var_power
             self.base_dict = {}
             for item in self.independent:
-                self.base_dict[item] = self._set_base_level(data[item])
+                self.base_dict[item] = self._set_base_level(data[item],base_dict_override)
             self.PDP = None
             self.variates = {}
             self.customs = {}
@@ -205,7 +206,7 @@ class GLMUtilityBase:
         )
         return model
 
-    def _set_base_level(self, item):
+    def _set_base_level(self, item, base_dict_override={}):
         """
         Using the specified weight to measure volume, will automatically set base level to the
         discrete level with the most volume of data.
@@ -217,8 +218,11 @@ class GLMUtilityBase:
         in the model fitting so that the intercept is the true intercept
         """
         data = pd.concat((item.to_frame(), self.data[self.weight].to_frame()), axis=1)
-        col = data.groupby(item)[self.weight].sum()
-        base_dict = col[col == max(col)].index[0]
+        if base_dict_override.get(item.name,'') != '':
+            base_dict = base_dict_override.get(item.name,'')
+        else:
+            col = data.groupby(item)[self.weight].sum()
+            base_dict = col[col == max(col)].index[0]
         # Necessary for Patsy formula to recognize both str and non-str data types.
         if type(base_dict) is str:
             base_dict = "'" + base_dict + "'"
@@ -227,106 +231,49 @@ class GLMUtilityBase:
     def _set_PDP(self):
         """
         This function creates a dataset for the partial dependence plots.  We identify the base
-        level of each feature, and then vary the levels of the desired feature in our predictions
-        """
-        PDP = {}
-        simple = [
-            item for item in self.transformed_data.columns if item in self.independent
-        ]
-        for item in simple:
-            customs = [
-                list(v["Z"].to_frame().columns)
-                for k, v in self.customs.items()
-                if v["source"] == item
-            ]
-            customs = [item for sublist in customs for item in sublist]
-            variates = [
-                list(v["Z"].columns)
-                for k, v in self.variates.items()
-                if v["source"] == item
-            ]
-            variates = [item for sublist in variates for item in sublist]
-            columns = [item] + customs
-            columns = [
-                val
-                for val in [item] + customs
-                if val in list(self.transformed_data.columns)
-            ]
-            variates = [
-                val for val in variates if val in list(self.transformed_data.columns)
-            ]
-            if variates != []:
-                temp = (
-                    self.transformed_data.groupby(columns)[variates]
-                    .mean()
-                    .reset_index()
-                )
-            else:
-                temp = (
-                    self.transformed_data.groupby(columns)[self.weight]
-                    .mean()
-                    .reset_index()
-                    .drop([self.weight], axis=1)
-                )
-            PDP[item] = temp
-        tempPDP = copy.deepcopy(PDP)
-        # Extract parameter table for constructing Confidence Interval Charts
-        out = self.extract_params()
-        intercept_se = out["CI offset"][0]
-        # For every factor in [independent]
-        for item in tempPDP.keys():
-            # Generates the Partial Dependence Tables that will be used for making predictions and plotting
-            for append in tempPDP.keys():
-                if item != append:
-                    if type(self.base_dict[append]) is str:
-                        temp = tempPDP[append][
-                            tempPDP[append][append]
-                            == self.base_dict[append].replace("'", "")
-                        ]
-                    else:
-                        temp = tempPDP[append][
-                            tempPDP[append][append] == self.base_dict[append]
-                        ]
-                    for column in temp.columns:
-                        PDP[item][column] = temp[column].iloc[0]
-            # Runs predicions
-            PDP[item]["Model"] = self.results.predict(PDP[item])
-            PDP[item]["Model"] = self._link_transform(PDP[item]["Model"])
-            # Creates offset PDP
-            offset_subset = {
-                self.offsets[item]["source"]: item for item in self.formula["offsets"]
-            }
-            if type(offset_subset.get(item)) is str:
-                PDP[item]["Model"] = (
-                    self._link_transform(
-                        PDP[item][item].map(
-                            self.offsets[offset_subset.get(item)]["dictionary"]
-                        )
-                        / self.offsets[offset_subset.get(item)]["rescale"]
-                    )
-                    + PDP[item]["Model"]
-                )
-            out_subset = out[out["field"] == item][["value", "CI offset"]]
-            out_subset["value"] = out_subset["value"].astype(PDP[item][item].dtype)
-            out_subset.set_index("value", inplace=True)
-            PDP[item].set_index(item, inplace=True)
-            PDP[item] = PDP[item].merge(
-                out_subset, how="left", left_index=True, right_index=True
-            )
-            PDP[item]["CI offset"] = PDP[item]["CI offset"].fillna(intercept_se)
-            PDP[item]["CI_U"] = PDP[item]["Model"] + PDP[item]["CI offset"]
-            PDP[item]["CI_L"] = PDP[item]["Model"] - PDP[item]["CI offset"]
-        self.PDP = PDP
+        level of each feature, and then vary the levels of the desired feature in our prediction
 
-    def _link_transform(self, series, transform_type="linear predictor"):
-        "method used to toggle between linear predictor and predicted values"
+        """
+        def set_individual_pdp(self, field):
+            unique_levels = self.data[field].unique()
+            base_dict = {}
+            for k,v in self.base_dict.items():
+                if type(v) is str:
+                    base_dict[k] = v.replace("'","")
+                else:
+                    base_dict[k] = v
+            base_dict_df = pd.DataFrame(base_dict,index=[0])
+
+            for column in base_dict_df.columns:
+                if base_dict_df[column].dtype==object:
+                    base_dict_df[column].str.replace("'","")
+            pdp = pd.DataFrame(np.repeat(np.array(base_dict_df),len(unique_levels),axis=0),columns =base_dict_df.columns)
+            pdp[field]=unique_levels
+            pdp = self.predict(self.transform_data(pdp))
+            intercept = self.extract_params()[self.extract_params()['field']=='Intercept']['param'].values
+            pdp.set_index(field, inplace = True)
+            shift = intercept - self._link_transform(pdp['Fitted Avg']).loc[base_dict[field]]
+            pdp['Model'] = self._link_transform(pdp['Fitted Avg']) + shift
+            pdp.drop(['Fitted Avg','offset'],axis=1, inplace=True)
+            out = self.extract_params()
+            pdp['CI offset'] = out['CI offset'][0]
+            pdp["CI_U"] = pdp["Model"] + pdp["CI offset"]
+            pdp["CI_L"] = pdp["Model"] - pdp["CI offset"]
+            return pdp
+        self.PDP = {item:set_individual_pdp(self, item) for item in self.independent}
+
+
+    def _link_transform(self, series, transform_to="linear predictor"):
+        '''method used to toggle between linear predictor and predicted values
+            This should really be a @staticmethod
+        '''
         if self.link == "Log":
-            if transform_type == "linear predictor":
+            if transform_to == "linear predictor":
                 return np.log(series)
             else:
                 return np.exp(series)
         if self.link == "Logit":
-            if transform_type == "linear predictor":
+            if transform_to == "linear predictor":
                 return np.log(series / (1 - series))
             else:
                 return np.exp(series) / (1 + np.exp(series))
@@ -360,14 +307,17 @@ class GLMUtilityBase:
             if type(self.base_dict[source_fields[0]]) is str
             else self.base_dict[source_fields[0]]
         )
-        intercept = np.exp(self.PDP[source_fields[0]]["Model"].loc[intercept_index])
+
+        intercept = self._link_transform(self.extract_params()[self.extract_params()['field']=='Intercept']['param'].values,
+                                          transform_to='predicted value')
 
         out_data = pd.DataFrame()
         out_data[key_column] = data[key_column]
         for item in source_fields:
             out_data[item + " value"] = data[item]
             out_data[item + " model"] = np.round(
-                np.exp(data[item].map(dict(self.PDP[item]["Model"]))) / intercept, 4
+                self._link_transform(data[item].map(dict(self.PDP[item]["Model"])),
+                                     transform_to='predicted value') / intercept , 4
             )
         out_data["Total model"] = np.round(
             np.product(
@@ -418,7 +368,7 @@ class GLMUtilityBase:
             dictionary: dict
                 A mapping of the original column values to custom binning."""
         temp = self.data[source].map(dictionary).rename(name)
-        self.base_dict[name] = self._set_base_level(temp)
+        self.base_dict[name] = self._set_base_level(temp,{})
         self.customs[name] = {"source": source, "Z": temp, "dictionary": dictionary}
 
     def fit(self, simple=[], customs=[], variates=[], interactions=[], offsets=[]):
@@ -502,28 +452,15 @@ class GLMUtilityBase:
             Custom factors need a base level
         """
         simple_str = " + ".join(
-            [
-                "C("
-                + item
-                + ", Treatment(reference="
-                + str(self.base_dict[item])
-                + "))"
-                for item in simple
-            ]
-        )
+            ["C(" + item + ", Treatment(reference="
+             + str(self.base_dict[item]) + "))"
+             for item in simple])
         variate_str = " + ".join(
-            [" + ".join(self.variates[item]["Z"].columns[1:]) for item in variates]
-        )
+            [" + ".join(self.variates[item]["Z"].columns[1:])
+             for item in variates])
         custom_str = " + ".join(
-            [
-                "C("
-                + item
-                + ", Treatment(reference="
-                + str(self.base_dict[item])
-                + "))"
-                for item in customs
-            ]
-        )
+            ["C(" + item + ", Treatment(reference=" + str(self.base_dict[item])
+             + "))" for item in customs])
         interaction_str = " + ".join([self.interactions[item] for item in interactions])
         if simple_str != "" and variate_str != "":
             variate_str = " + " + variate_str
@@ -597,7 +534,7 @@ class GLMUtilityBase:
                 name = self.formula["variates"][i]
                 temp = pd.DataFrame(
                     self._ortho_poly_predict(
-                        x=data[self.variates[name]["source"]].map(
+                        x=data[self.variates[name]["source"]].str.replace("'","").map(
                             self.variates[name]["dictionary"]
                         ),
                         variate=name,
@@ -610,24 +547,31 @@ class GLMUtilityBase:
                 transformed_data = pd.concat((transformed_data, temp), axis=1)
             for i in range(len(self.formula["customs"])):
                 name = self.formula["customs"][i]
-                temp = data[self.customs[name]["source"]].map(
+                temp = data[self.customs[name]["source"]].str.replace("'","").map(
                     self.customs[name]["dictionary"]
                 )
                 temp.name = name
                 transformed_data = pd.concat((transformed_data, temp), axis=1)
-
+            transformed_data = transformed_data.copy()
             transformed_data["offset"] = 0
             if len(self.formula["offsets"]) > 0:
-                temp = data[self.offsets[self.formula["offsets"][0]]["source"]].map(
+                temp = data[self.offsets[self.formula["offsets"][0]]["source"]].str.replace("'","").map(
                     self.offsets[self.formula["offsets"][0]]["dictionary"]
                 )
                 temp = self._link_transform(temp)
                 for i in range(len(self.formula["offsets"]) - 1):
-                    offset = data[
-                        self.offsets[self.formula["offsets"][i + 1]]["source"]
-                    ].map(
-                        self.offsets[self.formula["offsets"][i + 1]]["dictionary"]
-                    )  # This works for train, but need to apply to test
+                    try:
+                        offset = data[
+                            self.offsets[self.formula["offsets"][i + 1]]["source"].str.replace("'","")
+                        ].map(
+                            self.offsets[self.formula["offsets"][i + 1]]["dictionary"]
+                        )  # This works for train, but need to apply to test
+                    except:
+                        offset = data[
+                            self.offsets[self.formula["offsets"][i + 1]]["source"]
+                        ].map(
+                            self.offsets[self.formula["offsets"][i + 1]]["dictionary"]
+                        )  # This works for train, but need to apply to test
                     temp = temp + self._link_transform(offset)
                 transformed_data["offset"] = temp
         return transformed_data
