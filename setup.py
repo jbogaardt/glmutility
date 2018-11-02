@@ -4,8 +4,8 @@ with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name='GLMUtility',
-    version='0.1.0',
+    name='glmutility',
+    version='0.2.0',
     author='John S. Bogaardt',
     author_email='jbogaardt@gmail.com',
     description='Utility wrapper for statsmodels generalized linear model framework',
@@ -24,6 +24,7 @@ setuptools.setup(
         'pyyaml',
         'scipy',
         'statsmodels',
+        'patsy',
     ],
 extras_require={
         'jupyter': [
