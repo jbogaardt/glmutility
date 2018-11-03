@@ -2,28 +2,27 @@
 """
 
 """
+import copy
+import math
 
 import pandas as pd
 import numpy as np
-from ..Base.Base import GLMUtilityBase
 import statsmodels.api as sm
+import yaml
 from bokeh.plotting import figure
-from bokeh.io import output_notebook, show, output_file, export_png
+from bokeh.io import show, output_file, export_png
 from bokeh.layouts import gridplot
 from bokeh.models import LinearAxis, Range1d, ColumnDataSource, Title
-from bokeh.palettes import Spectral9
+from bokeh.palettes import Spectral9  # pylint: disable=no-name-in-module
 from bokeh.models import HoverTool, NumeralTickFormatter
-import math
-import yaml
 
 import ipywidgets as widgets
 from ipywidgets import interactive, fixed
-import copy
 
-output_notebook()
+from .base import GLMBase
 
 
-class GLM(GLMUtilityBase):
+class GLM(GLMBase):
     def view(self, data=None):
         """The main UI of the GLMUtility"""
 
@@ -821,5 +820,3 @@ class GLM(GLMUtilityBase):
         """This function needs to be documented..."""
         for each_lift in lift_list:
             self.lifts.append(each_lift)
-
-    

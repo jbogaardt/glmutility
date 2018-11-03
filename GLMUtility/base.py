@@ -2,17 +2,16 @@
 """
 
 """
+import copy
+import math
 
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
-import math
 import yaml
-import copy
 
 
-
-class GLMUtilityBase:
+class GLMBase:
     """GLMUtility is built around the `statsmodels
     <http://www.statsmodels.org/devel/index.html>`_
     GLM framework. It's purpose is to create a quasi-UI in Jupyter to allow for
