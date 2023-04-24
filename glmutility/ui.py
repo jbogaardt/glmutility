@@ -4,11 +4,13 @@
 """
 import copy
 import math
+import io
+import pickle
 
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
-import yaml
+# import statsmodels.api as sm
+# import yaml
 from bokeh.plotting import figure
 from bokeh.io import show, output_file, export_png
 from bokeh.layouts import gridplot
@@ -19,12 +21,23 @@ from bokeh.models import HoverTool, NumeralTickFormatter
 import ipywidgets as widgets
 from ipywidgets import interactive, fixed
 
-from .base import GLMBase
+from glmutility.base import GLMBase
 
 
 class GLM(GLMBase):
-    def view(self, data=None):
-        """The main UI of the GLMUtility"""
+    def as_base(self) -> GLMBase:
+        """ Upcast this GLM UI instance to a GLMBase instance for pickling """
+        cast = GLMBase.__new__(GLMBase)
+        cast.__dict__ = self.__dict__.copy()
+        return cast
+
+    @classmethod
+    def unpickle(self, f: io.RawIOBase) -> 'GLM':
+        """ Unpickle a ui.GLM or GLMBase as a ui.GLM """
+        return pickle.load(f).as_ui()
+
+    def view(self, data=None, scale_factor=1):
+        """ The main UI of the GLMUtility """
 
         def view_one_way(var, transform, obs, fitted, model, ci, data):
             if data is None:
@@ -41,8 +54,8 @@ class GLM(GLMBase):
                     values=[self.dependent, self.weight, "Fitted Avg"],
                     aggfunc=np.sum,
                 )
-            temp["Observed"] = temp[self.dependent] / temp[self.weight]
-            temp["Fitted"] = temp["Fitted Avg"] / temp[self.weight]
+            temp["Observed"] = temp[self.dependent] / temp[self.weight]/scale_factor
+            temp["Fitted"] = temp["Fitted Avg"] / temp[self.weight]/scale_factor
             temp = temp.merge(
                 self.PDP[var][["Model", "CI_U", "CI_L"]],
                 how="inner",
@@ -55,6 +68,9 @@ class GLM(GLMBase):
             else:
                 for item in ["Observed", "Fitted"]:
                     temp[item] = self._link_transform(temp[item], "linear predictor")
+            
+            temp[self.weight] = temp[self.weight]*scale_factor
+	    
             y_range = Range1d(start=0, end=temp[self.weight].max() * 1.8)
             hover = HoverTool(
                 tooltips=[("(x,y)", "($x{0.00 a}, $y{0.00 a})")], mode="mouse"
@@ -94,6 +110,9 @@ class GLM(GLMBase):
             # add bar renderer
             p.rect(x=temp.index, y=adj_h, width=0.4, height=h, color="#e5e500")
             # add line to secondondary axis
+
+            temp['Model'] = temp['Model']/scale_factor
+
             p.extra_y_ranges = {
                 "foo": Range1d(
                     start=min(temp["Observed"].min(), temp["Model"].min()) / 1.1,
@@ -102,7 +121,7 @@ class GLM(GLMBase):
             }
             # p.add_layout(LinearAxis(y_range_name="foo"), 'right')
             # Observed Average line values
-            if obs == True:
+            if obs is True:
                 p.line(
                     temp.index,
                     temp["Observed"],
@@ -110,7 +129,7 @@ class GLM(GLMBase):
                     color="#ff69b4",
                     y_range_name="foo",
                 )
-            if fitted == True:
+            if fitted is True:
                 p.line(
                     temp.index,
                     temp["Fitted"],
@@ -118,7 +137,7 @@ class GLM(GLMBase):
                     color="#006400",
                     y_range_name="foo",
                 )
-            if model == True:
+            if model is True:
                 p.line(
                     temp.index,
                     temp["Model"],
@@ -126,7 +145,7 @@ class GLM(GLMBase):
                     color="#00FF00",
                     y_range_name="foo",
                 )
-            if ci == True:
+            if ci is True:
                 p.line(
                     temp.index,
                     temp["CI_U"],
@@ -192,8 +211,7 @@ class GLM(GLMBase):
         dont_show_give=False,
         file_name=None,
     ):
-        """ n-Decile lift chart
-        """
+        """ n-Decile lift chart """
         if data is None:
             data = self.transformed_data
         else:
@@ -267,7 +285,7 @@ class GLM(GLMBase):
             color="#006400",
             y_range_name="foo",
         )
-        if table == True:
+        if table is True:
             return temp
         elif file_name is None:
             show(p)
@@ -275,8 +293,9 @@ class GLM(GLMBase):
             export_png(p, filename=file_name)
 
     def head_to_head(self, challenger, data=None, table=False):
-        """Two way lift chart that is sorted by difference between Predicted
-        scores.  Still bucketed to 10 levels with the same approximate weight
+        """
+        Two way lift chart that is sorted by difference between Predicted scores.
+        Still bucketed to 10 levels with the same approximate weight.
         """
         if data is None:
             data1 = self.transformed_data
@@ -361,16 +380,13 @@ class GLM(GLMBase):
             y_range_name="foo",
         )
         p.legend.location = "top_left"
-        if table == False:
+        if table is False:
             show(p)
         else:
             return temp
 
-
     def two_way(self, x1, x2, pdp=False, table=False, file_name=None):
-        """ Two way (two features from independent list) view of data
-
-        """
+        """ Two way (two features from independent list) view of data """
         data = self.transformed_data
         a = (
             pd.pivot_table(
@@ -451,7 +467,7 @@ class GLM(GLMBase):
         p.add_layout(
             Title(text=x1 + " vs " + x2, text_font_size="12pt", align="left"), "above"
         )
-        if pdp == False:
+        if pdp is False:
             p.extra_y_ranges = {
                 "foo": Range1d(
                     start=np.min(np.array(outcome)) / 1.1,
@@ -479,7 +495,7 @@ class GLM(GLMBase):
                     line_alpha=1,
                     y_range_name="foo",
                 )
-        if pdp == True:
+        if pdp is True:
             pdp = np.transpose(
                 [
                     np.tile(self.PDP[x1].index, len(self.PDP[x2].index)),
@@ -514,7 +530,7 @@ class GLM(GLMBase):
                     y_range_name="foo",
                 )
         p.xaxis.major_label_orientation = math.pi / 4
-        if table == True:
+        if table is True:
             return a
         elif file_name is None:
             show(p)
@@ -524,7 +540,7 @@ class GLM(GLMBase):
     def create_comparisons(
         self, columns, title="", obs=True, fitted=True, model=True, ci=True, ret=False
     ):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
 
         def view_one_way(transform, column, title, obs, fitted, model, ci):
             data = self.transformed_data[
@@ -602,7 +618,7 @@ class GLM(GLMBase):
             }
 
             # Observed Average line values
-            if obs == True:
+            if obs is True:
                 f.line(
                     temp.index,
                     temp["Observed"],
@@ -610,7 +626,7 @@ class GLM(GLMBase):
                     color="#ff69b4",
                     y_range_name="foo",
                 )
-            if fitted == True:
+            if fitted is True:
                 f.line(
                     temp.index,
                     temp["Fitted"],
@@ -618,7 +634,7 @@ class GLM(GLMBase):
                     color="#006400",
                     y_range_name="foo",
                 )
-            if model == True:
+            if model is True:
                 f.line(
                     temp.index,
                     temp["Model"],
@@ -626,7 +642,7 @@ class GLM(GLMBase):
                     color="#00FF00",
                     y_range_name="foo",
                 )
-            if ci == True:
+            if ci is True:
                 f.line(
                     temp.index,
                     temp["CI_U"],
@@ -665,7 +681,7 @@ class GLM(GLMBase):
             return comparisons
 
     def view_comparisons(self, file_name=None, ncols=2, reorder=[]):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
 
         def reorder_comparisons(order):
             if (
@@ -673,16 +689,21 @@ class GLM(GLMBase):
                 or min([x for x in order if x is not None]) != 0
             ):
                 error = (
-                    """ Error, unable to reorder list because the count of reorder is not equal to the number of comparisons.
-                            Use get_comparisons_count() then reorder the list that way. For instance: for a comparison count of 3
-                            you may wish to do this reorder_comparisons([0,2,1]). in this case you need it to go from 0 to """
+                    """
+                    Error, unable to reorder list because the count of reorder
+                    is not equal to the number of comparisons. Use
+                    get_comparisons_count() then reorder the list that way.
+                    For instance: for a comparison count of 3 you may wish to do
+                    this reorder_comparisons([0,2,1]). in this case you need it
+                    to go from 0 to
+                    """
                     + str(len(self.comparisons) - 1)
                     + ". you can also add None into the list to make a blank space."
                 )
                 return error
             comparisons = []
             for item in order:
-                if item == None:
+                if item is None:
                     comparisons.append(None)
                 else:
                     comparisons.append(self.comparisons[item])
@@ -709,23 +730,26 @@ class GLM(GLMBase):
             show(p)
         else:
             print(
-                "You must create_comparisons(colums) first, before you can view_comparisons(file_name,ncols). Then you can clear_comparisons()."
+                """
+                You must create_comparisons(colums) first, before you can
+                view_comparisons(file_name,ncols). Then you can clear_comparisons().
+                """
             )
 
     def clear_comparisons(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         self.comparisons = []
 
     def get_comparisons(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         return self.comparisons
 
     def get_comparisons_count(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         return len(self.comparisons)
 
     def give_comparisons(self, comparison_list):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         for each_comparison in comparison_list:
             self.comparisons.append(each_comparison)
 
@@ -740,19 +764,22 @@ class GLM(GLMBase):
         ret=True,
         file_name=None,
     ):
-        """ This method is built off of the comparison methods.  The purpose is to
-        convert the dynamic view() method into a programmatic expression for quick file
-        output."""
+        """
+        This method is built off of the comparison methods.  The purpose is to
+        convert the dynamic view() method into a programmatic expression for
+        quick file output.
+        """
         temp = list(self.comparisons)
         self.clear_comparisons()
-        comparisons = self.create_comparisons(
-            [column], title=title, obs=obs, fitted=fitted, model=model, ci=ci, ret=ret
-        )
+        # assigned but never used:
+        # comparisons = self.create_comparisons(
+        #     [column], title=title, obs=obs, fitted=fitted, model=model, ci=ci, ret=ret
+        # )
         self.view_comparisons(file_name)
         self.comparisons = list(temp)
 
     def create_lift(self, data=None, title="", ret=False):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         if data is not None:
             data = data.reset_index()
         lift = self.lift_chart(data=None, title=title, dont_show_give=True)
@@ -761,7 +788,7 @@ class GLM(GLMBase):
             return [lift]
 
     def view_lifts(self, file_name=None, ncols=2, reorder=[]):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
 
         def reorder_lifts(order):
             if (
@@ -769,16 +796,21 @@ class GLM(GLMBase):
                 or min([x for x in order if x is not None]) != 0
             ):
                 error = (
-                    """ Error, unable to reorder list because the count of reorder is not equal to the number of comparisons.
-                            Use get_comparisons_count() then reorder the list that way. For instance: for a comparison count of 3
-                            you may wish to do this reorder_comparisons([0,2,1]). in this case you need it to go from 0 to """
+                    """
+                    Error, unable to reorder list because the count of reorder
+                    is not equal to the number of comparisons. Use
+                    get_comparisons_count() then reorder the list that way.
+                    For instance: for a comparison count of 3 you may wish to do
+                    this reorder_comparisons([0,2,1]). in this case you need it
+                    to go from 0 to
+                    """
                     + str(len(self.lifts) - 1)
                     + ". you can also add None into the list to make a blank space."
                 )
                 return error
             lifts = []
             for item in order:
-                if item == None:
+                if item is None:
                     lifts.append(None)
                 else:
                     lifts.append(self.lifts[item])
@@ -805,18 +837,18 @@ class GLM(GLMBase):
             )
 
     def clear_lifts(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         self.lifts = []
 
     def get_lifts(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         return self.lifts
 
     def get_lifts_count(self):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         return len(self.lifts)
 
     def give_lifts(self, lift_list):
-        """This function needs to be documented..."""
+        """ This function needs to be documented... """
         for each_lift in lift_list:
             self.lifts.append(each_lift)

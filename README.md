@@ -5,9 +5,10 @@ UI experience.  It is quasi as it still requires writing Python code, but it is 
 For the P&C actuaries out there, the workflow design is highly inspired by one of the more prominent GLM
 GUIs in the industry.
 
-Data prerequisite is that all variables be discrete (i.e. bin your continuous variables).  The utility supports pandas dataframes.
+Data prerequisite is that all variables be discrete (i.e. bin your continuous variables).  The utility supports pandas dataframes. 
 
 # GLMUtility Example
+
 
 ```python
 import pandas as pd

@@ -3,7 +3,8 @@
 
 """
 import copy
-import math
+import pickle
+import io
 
 import pandas as pd
 import numpy as np
@@ -12,7 +13,8 @@ import yaml
 
 
 class GLMBase:
-    """GLMUtility is built around the `statsmodels
+    """
+    GLMUtility is built around the `statsmodels
     <http://www.statsmodels.org/devel/index.html>`_
     GLM framework. It's purpose is to create a quasi-UI in Jupyter to allow for
     a point-and-click UI experience. It is quasi as it still requires writing
@@ -96,7 +98,6 @@ class GLMBase:
         formula: dict
             The patsy formula of the GLM as well as various other meta-data on the
             fitted model
-
     """
 
     def __init__(
@@ -108,12 +109,12 @@ class GLMBase:
         family="Poisson",
         link="Log",
         scale="X2",
-        tweedie_var_power = 1.0,
+        tweedie_var_power=1.0,
         glm_config=None,
         additional_fields=None,
         base_dict_override={}
     ):
-        if independent is not None and dependent is not None and weight is not None:
+        if all(i is not None for i in [independent, dependent, weight]):
             self.data = data.reset_index().drop("index", axis=1)
             # make it a list of one if user only passed a single column
             independent = (
@@ -128,7 +129,7 @@ class GLMBase:
             self.tweedie_var_power = tweedie_var_power
             self.base_dict = {}
             for item in self.independent:
-                self.base_dict[item] = self._set_base_level(data[item],base_dict_override)
+                self.base_dict[item] = self._set_base_level(data[item], base_dict_override)
             self.PDP = None
             self.variates = {}
             self.customs = {}
@@ -156,13 +157,40 @@ class GLMBase:
         else:
             raise TypeError("GLM constructor not properly called.")
 
+    def as_ui(self) -> 'glmutility.ui.GLM':
+        """
+        Downcast a base.GLMBase instance to a ui.GLM instance.
+        Use this when loading from a pickle.
+        Does nothing if called on a ui.GLM.
+        """
+        from glmutility.ui import GLM
+        if isinstance(self, GLM):
+            return self
+        cast = GLM.__new__(GLM)
+        cast.__dict__ = self.__dict__.copy()
+        return cast
+
+    def as_base(self) -> 'GLMBase':
+        return self
+
+    def pickle(self, f: io.RawIOBase):
+        """
+        Pickle a ui.GLM or GLMBase as a GLMBase
+        """
+        pickle.dump(self.as_base(), f)
+
+    @classmethod
+    def unpickle(cls, f: io.RawIOBase) -> 'GLMBase':
+        """ Unpickle a ui.GLM or GLMBase as a GLMBase """
+        return pickle.load(f).as_base()
+
     def _import_model(self, file_name):
-        "Loads model structure from a yaml config file"
+        """ Loads model structure from a yaml config file """
         with open(file_name, "r") as input:
             return yaml.load(input)
 
     def _create_features(self, model, glm_config, feature_type):
-        "Creates features of a model from a yaml config file"
+        """ Creates features of a model from a yaml config file """
         func_dict = {
             "customs": model.create_custom,
             "variates": model.create_variate,
@@ -176,14 +204,17 @@ class GLMBase:
         return
 
     def _construct_model(self, train, glm_config, additional_fields=None):
-        "Constructs a model from a yaml config file"
+        """
+        Constructs a model from a yaml config file
+        ERROR: this currently isnt' working since we broke out UI and GLM
+        """
         if additional_fields is not None:
             list_1 = glm_config["structure"]["independent"]
             list_2 = additional_fields
             main_list = list_1 + list(np.setdiff1d(list_2, list_1))
         else:
             main_list = glm_config["structure"]["independent"]
-        model = GLM(
+        model = GLMBase(
             data=train,
             independent=main_list,
             dependent=glm_config["structure"]["dependent"],
@@ -217,8 +248,8 @@ class GLMBase:
         in the model fitting so that the intercept is the true intercept
         """
         data = pd.concat((item.to_frame(), self.data[self.weight].to_frame()), axis=1)
-        if base_dict_override.get(item.name,'') != '':
-            base_dict = base_dict_override.get(item.name,'')
+        if base_dict_override.get(item.name, '') != '':
+            base_dict = base_dict_override.get(item.name, '')
         else:
             col = data.groupby(item)[self.weight].sum()
             base_dict = col[col == max(col)].index[0]
@@ -231,41 +262,43 @@ class GLMBase:
         """
         This function creates a dataset for the partial dependence plots.  We identify the base
         level of each feature, and then vary the levels of the desired feature in our prediction
-
         """
         def set_individual_pdp(self, field):
             unique_levels = self.data[field].unique()
             base_dict = {}
-            for k,v in self.base_dict.items():
+            for k, v in self.base_dict.items():
                 if type(v) is str:
-                    base_dict[k] = v.replace("'","")
+                    base_dict[k] = v.replace("'", "")
                 else:
                     base_dict[k] = v
-            base_dict_df = pd.DataFrame(base_dict,index=[0])
+            base_dict_df = pd.DataFrame(base_dict, index=[0])
 
             for column in base_dict_df.columns:
-                if base_dict_df[column].dtype==object:
-                    base_dict_df[column].str.replace("'","")
-            pdp = pd.DataFrame(np.repeat(np.array(base_dict_df),len(unique_levels),axis=0),columns =base_dict_df.columns)
-            pdp[field]=unique_levels
+                if base_dict_df[column].dtype == object:
+                    base_dict_df[column].str.replace("'", "")
+            pdp = pd.DataFrame(
+                np.repeat(np.array(base_dict_df), len(unique_levels), axis=0),
+                columns=base_dict_df.columns,
+            )
+            pdp[field] = unique_levels
             pdp = self.predict(self.transform_data(pdp))
-            intercept = self.extract_params()[self.extract_params()['field']=='Intercept']['param'].values
-            pdp.set_index(field, inplace = True)
+            intercept = self.extract_params()[self.extract_params()['field'] == 'Intercept']['param'].values
+            pdp.set_index(field, inplace=True)
             shift = intercept - self._link_transform(pdp['Fitted Avg']).loc[base_dict[field]]
             pdp['Model'] = self._link_transform(pdp['Fitted Avg']) + shift
-            pdp.drop(['Fitted Avg','offset'],axis=1, inplace=True)
+            pdp.drop(['Fitted Avg', 'offset'], axis=1, inplace=True)
             out = self.extract_params()
             pdp['CI offset'] = out['CI offset'][0]
             pdp["CI_U"] = pdp["Model"] + pdp["CI offset"]
             pdp["CI_L"] = pdp["Model"] - pdp["CI offset"]
             return pdp
-        self.PDP = {item:set_individual_pdp(self, item) for item in self.independent}
-
+        self.PDP = {item: set_individual_pdp(self, item) for item in self.independent}
 
     def _link_transform(self, series, transform_to="linear predictor"):
-        '''method used to toggle between linear predictor and predicted values
-            This should really be a @staticmethod
-        '''
+        """
+        method used to toggle between linear predictor and predicted values
+        This should really be a @staticmethod
+        """
         if self.link == "Log":
             if transform_to == "linear predictor":
                 return np.log(series)
@@ -280,8 +313,7 @@ class GLMBase:
             return series
 
     def extract_params(self):
-        """ Returns the summary statistics from the statsmodel GLM.
-        """
+        """ Returns the summary statistics from the statsmodel GLM """
         summary = pd.read_html(
             self.results.summary().__dict__["tables"][1].as_html(), header=0
         )[0].iloc[:, 0]
@@ -297,26 +329,33 @@ class GLMBase:
         return out
 
     def score_detail(self, data, key_column):
-        """ Gets score detail for factor transparency
-            DO NOT USE for anything other than Log Link
-            Also not tested on Interactions"""
+        """
+        Gets score detail for factor transparency
+        DO NOT USE for anything other than Log Link
+        Also not tested on Interactions
+        """
         source_fields = self.formula["source_fields"]
-        intercept_index = (
-            self.base_dict[source_fields[0]].replace("'", "")
-            if type(self.base_dict[source_fields[0]]) is str
-            else self.base_dict[source_fields[0]]
+        # assigned but never used:
+        # intercept_index = (
+        #     self.base_dict[source_fields[0]].replace("'", "")
+        #     if type(self.base_dict[source_fields[0]]) is str
+        #     else self.base_dict[source_fields[0]]
+        # )
+
+        intercept = self._link_transform(
+            self.extract_params()[self.extract_params()['field'] == 'Intercept']['param'].values,
+            transform_to='predicted value'
         )
-
-        intercept = self._link_transform(self.extract_params()[self.extract_params()['field']=='Intercept']['param'].values,
-                                          transform_to='predicted value')
-
         out_data = pd.DataFrame()
         out_data[key_column] = data[key_column]
         for item in source_fields:
             out_data[item + " value"] = data[item]
             out_data[item + " model"] = np.round(
-                self._link_transform(data[item].map(dict(self.PDP[item]["Model"])),
-                                     transform_to='predicted value') / intercept , 4
+                self._link_transform(
+                    data[item].map(dict(self.PDP[item]["Model"])),
+                    transform_to='predicted value'
+                ) / intercept,
+                4,
             )
         out_data["Total model"] = np.round(
             np.product(
@@ -328,7 +367,8 @@ class GLMBase:
         return out_data
 
     def create_variate(self, name, source, degree, dictionary={}):
-        """method to create a variate, i.e. a polynomial smoothing of a simple factor
+        """
+        method to create a variate, i.e. a polynomial smoothing of a simple factor
 
         Parameters:
             name : str
@@ -340,8 +380,7 @@ class GLMBase:
             dictionary: dict
                 A mapping of the original column values to variate arguments.  The
                 values of the dictionary must be numeric.
-
-                """
+        """
         sub_dict = {}
         Z, norm2, alpha = self._ortho_poly_fit(
             x=self.data[source], degree=degree, dictionary=dictionary
@@ -357,7 +396,8 @@ class GLMBase:
         self.variates[name] = sub_dict
 
     def create_custom(self, name, source, dictionary):
-        """method to bin levels of a simple factor to a more aggregate level
+        """
+        method to bin levels of a simple factor to a more aggregate level
 
         Parameters:
             name : str
@@ -365,13 +405,15 @@ class GLMBase:
             source : str
                 The column in `data` to which you want to apply custom feature
             dictionary: dict
-                A mapping of the original column values to custom binning."""
+                A mapping of the original column values to custom binning.
+        """
         temp = self.data[source].map(dictionary).rename(name)
-        self.base_dict[name] = self._set_base_level(temp,{})
+        self.base_dict[name] = self._set_base_level(temp, {})
         self.customs[name] = {"source": source, "Z": temp, "dictionary": dictionary}
 
     def fit(self, simple=[], customs=[], variates=[], interactions=[], offsets=[]):
-        """Method to fit the GLM using the statsmodels packageself.
+        """
+        Method to fit the GLM using the statsmodels packageself.
 
         Parameters:
             simple : list
@@ -489,8 +531,10 @@ class GLMBase:
         )
 
     def transform_data(self, data=None):
-        """Method to add any customs, variates, interactions, and offsets to a
-        generic dataset so that it can be used in the GLM object"""
+        """
+        Method to add any customs, variates, interactions, and offsets to a
+        generic dataset so that it can be used in the GLM object
+        """
         if data is None:
             # Used for training dataset
             transformed_data = self.data[
@@ -533,7 +577,7 @@ class GLMBase:
                 name = self.formula["variates"][i]
                 temp = pd.DataFrame(
                     self._ortho_poly_predict(
-                        x=data[self.variates[name]["source"]].str.replace("'","").map(
+                        x=data[self.variates[name]["source"]].str.replace("'", "").map(
                             self.variates[name]["dictionary"]
                         ),
                         variate=name,
@@ -546,7 +590,7 @@ class GLMBase:
                 transformed_data = pd.concat((transformed_data, temp), axis=1)
             for i in range(len(self.formula["customs"])):
                 name = self.formula["customs"][i]
-                temp = data[self.customs[name]["source"]].str.replace("'","").map(
+                temp = data[self.customs[name]["source"]].str.replace("'", "").map(
                     self.customs[name]["dictionary"]
                 )
                 temp.name = name
@@ -554,18 +598,17 @@ class GLMBase:
             transformed_data = transformed_data.copy()
             transformed_data["offset"] = 0
             if len(self.formula["offsets"]) > 0:
-                temp = data[self.offsets[self.formula["offsets"][0]]["source"]].str.replace("'","").map(
+                temp = data[self.offsets[self.formula["offsets"][0]]["source"]].str.replace("'", "").map(
                     self.offsets[self.formula["offsets"][0]]["dictionary"]
                 )
                 temp = self._link_transform(temp)
                 for i in range(len(self.formula["offsets"]) - 1):
                     try:
                         offset = data[
-                            self.offsets[self.formula["offsets"][i + 1]]["source"].str.replace("'","")
-                        ].map(
+                            self.offsets[self.formula["offsets"][i + 1]]["source"].str.replace("'", "")].map(
                             self.offsets[self.formula["offsets"][i + 1]]["dictionary"]
                         )  # This works for train, but need to apply to test
-                    except:
+                    except Exception as e:
                         offset = data[
                             self.offsets[self.formula["offsets"][i + 1]]["source"]
                         ].map(
@@ -576,7 +619,7 @@ class GLMBase:
         return transformed_data
 
     def predict(self, data=None):
-        """Makes predicitons off of the fitted GLM"""
+        """ Makes predicitons off of the fitted GLM """
         if isinstance(data, pd.Series):
             data = data.to_frame().T
         data = self.transform_data(data)
@@ -586,7 +629,7 @@ class GLMBase:
 
     # User callable
     def create_interaction(self, name, interaction):
-        """ Creates an interaction term to be fit in the GLM"""
+        """ Creates an interaction term to be fit in the GLM """
         temp = {
             **{item: "simple" for item in self.independent},
             **{item: "variate" for item in self.variates.keys()},
@@ -600,8 +643,8 @@ class GLMBase:
                     self.variates[interaction[i]]["Z"].columns
                 )
             elif interaction_type[i] == "custom":
-                transformed_interaction[i] = list(
-                    self.customs[interaction[i]]["Z"].columns
+                transformed_interaction[i] = (
+                    self.customs[interaction[i]]["Z"].name
                 )
             else:
                 transformed_interaction[i] = [interaction[i]]
@@ -615,7 +658,7 @@ class GLMBase:
         )
 
     def create_offset(self, name, source, dictionary):
-        """ Creates an offset term to be fit in the GLM"""
+        """ Creates an offset term to be fit in the GLM """
         self.data
         temp = self.data[source].map(dictionary)
         rescale = sum(self.data[self.weight] * temp) / sum(self.data[self.weight])
@@ -631,8 +674,10 @@ class GLMBase:
         }
 
     def _ortho_poly_fit(self, x, degree=1, dictionary={}):
-        """Helper method to fit an orthogonal polynomial in the GLM.  This function
-        should generally not be called by end-user and can be hidden."""
+        """
+        Helper method to fit an orthogonal polynomial in the GLM.  This function
+        should generally not be called by end-user and can be hidden.
+        """
         n = degree + 1
         if dictionary != {}:
             x = x.map(dictionary)
@@ -651,8 +696,10 @@ class GLMBase:
         return Z, norm2, alpha
 
     def _ortho_poly_predict(self, x, variate):
-        """Helper method to make predictions off of an orthogonal polynomial in the GLM.  This function
-        should generally not be called by end-user and can be hidden."""
+        """
+        Helper method to make predictions off of an orthogonal polynomial in the GLM.
+        This function should generally not be called by end-user and can be hidden.
+        """
         alpha = self.variates[variate]["alpha"]
         norm2 = self.variates[variate]["norm2"]
         degree = self.variates[variate]["degree"]
@@ -670,45 +717,43 @@ class GLMBase:
         Z /= np.sqrt(norm2)
         return Z
 
-
-
     def gini(self, data=None):
-        """ This code was shamelessly lifted from `Kaggle
+        """
+        This code was shamelessly lifted from `Kaggle
         <https://www.kaggle.com/jpopham91/gini-scoring-simple-and-efficient>`_
         Simple implementation of the (normalized) gini score in numpy
         Fully vectorized, no python loops, zips, etc.
         Significantly (>30x) faster than previous implementions
-
         """
         if data is None:
             data = self.transformed_data
         else:
             data = self.predict(data)
         # assign y_true, y_pred
-        y_true = data[self.dependent] # Actual Loss
-        y_pred = data["Fitted Avg"]/data[self.weight] # Predicted ratio
+        y_true = data[self.dependent]  # Actual Loss
+        y_pred = data["Fitted Avg"]/data[self.weight]  # Predicted ratio
         # check and get number of samples
-        temp = pd.DataFrame({'y_pred':y_pred,
-                             'y_true':y_true,
-                             'weight':data[self.weight]}) \
-                             .sort_values('y_pred', ascending=False)
+        temp = pd.DataFrame({'y_pred': y_pred,
+                             'y_true': y_true,
+                             'weight': data[self.weight]}).sort_values('y_pred', ascending=False)
         gini_x = temp['weight'].cumsum()/temp['weight'].sum()
         gini_y = temp['y_true'].cumsum()/temp['y_true'].sum()
-        gini_x = gini_x - np.append(np.array([0]),gini_x[:-1])
-        gini_y = (np.append(np.array([0]),gini_y[:-1]) + gini_y)/2
+        gini_x = gini_x - np.append(np.array([0]), gini_x[:-1])
+        gini_y = (np.append(np.array([0]), gini_y[:-1]) + gini_y)/2
         gini = np.sum(gini_x*gini_y)-.5
         return gini
 
     def __repr__(self):
-        return self.results.summary()
+        if getattr(self, 'results', None):
+            return self.results.summary()
+        return super().__repr__()
 
     def summary(self):
-        """Returns the statsmodel.api model summary"""
+        """ Returns the statsmodel.api model summary """
         return self.results.summary()
 
     def perfect_correlation(self):
-        """ Examining correlation of factor levels
-        """
+        """ Examining correlation of factor levels """
         test = self.transformed_data[
             list(set(self.fitted_factors["customs"] + self.fitted_factors["simple"]))
         ]
@@ -740,7 +785,8 @@ class GLMBase:
         return test4
 
     def export_model(self, file_name):
-        """  This method exports a YAML file with all configurations of a GLM model.
+        """
+        This method exports a YAML file with all configurations of a GLM model.
         This makes it easy to add the GLM to a version control system like git as well
         as rebuild the model in a different environment.
 
@@ -750,7 +796,6 @@ class GLMBase:
 
         Returns:
             None
-
         """
         v = {
             item: {

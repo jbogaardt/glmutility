@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='glmutility',
-    version='0.2.0',
+    version='0.2.1',
     author='John S. Bogaardt',
     author_email='jbogaardt@gmail.com',
     description='Utility wrapper for statsmodels generalized linear model framework',
@@ -26,7 +26,7 @@ setuptools.setup(
         'statsmodels',
         'patsy',
     ],
-extras_require={
+    extras_require={
         'jupyter': [
              'bokeh',
              'ipywidgets',
