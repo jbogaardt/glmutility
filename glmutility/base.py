@@ -428,14 +428,16 @@ class GLMBase:
                 A list of all of the offsets you want fitted in the model.
         """
         link_dict = {
-            "Identity": sm.families.links.identity,
-            "Log": sm.families.links.log,
-            "Logit": sm.families.links.logit,
-            "Square": sm.families.links.sqrt,
-            "Probit": sm.families.links.probit,
-            "Cauchy": sm.families.links.cauchy,
-            "Cloglog": sm.families.links.cloglog,
-            "Inverse": sm.families.links.inverse_power,
+            "Identity": sm.families.links.Identity(),
+            "Log": sm.families.links.Log(),
+            "Logit": sm.families.links.Logit(),
+            "Square": sm.families.links.Sqrt(),
+            "Probit": sm.families.links.Probit(),
+            "Cauchy": sm.families.links.Cauchy(),
+            "CLogLog": sm.families.links.CLogLog(),
+            "InversePower": sm.families.links.InversePower(),
+            "InverseSquared": sm.families.links.InverseSquared(),
+            "NegativeBinomial": sm.families.links.NegativeBinomial(),
         }
         link = link_dict[self.link]
         if self.family == "Poisson":
